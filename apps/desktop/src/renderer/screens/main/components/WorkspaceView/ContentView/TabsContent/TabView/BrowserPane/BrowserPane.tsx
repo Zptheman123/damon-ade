@@ -42,6 +42,7 @@ export function BrowserPane({
 	const isLoading = browserState?.isLoading ?? false;
 	const loadError = browserState?.error ?? null;
 	const isBlankPage = currentUrl === "about:blank";
+	const viewport = browserState?.viewport ?? null;
 
 	const {
 		containerRef,
@@ -112,8 +113,24 @@ export function BrowserPane({
 				</div>
 			)}
 		>
-			<div className="relative flex flex-1 h-full">
-				<div ref={containerRef} className="w-full h-full" style={{ flex: 1 }} />
+			<div
+				className={`relative flex flex-1 h-full ${viewport ? "items-start justify-center overflow-auto bg-muted/40 p-3" : ""}`}
+			>
+				{/* A chosen screen size shows the page at that size (scroll if larger). */}
+				<div
+					ref={containerRef}
+					className={
+						viewport
+							? "shrink-0 overflow-hidden rounded-md border bg-background shadow-sm"
+							: "w-full h-full"
+					}
+					style={
+						viewport
+							? { width: viewport.width, height: viewport.height }
+							: { flex: 1 }
+					}
+					data-viewport={viewport?.name ?? "fit"}
+				/>
 				{loadError && !isLoading && (
 					<BrowserErrorOverlay error={loadError} onRetry={reload} />
 				)}

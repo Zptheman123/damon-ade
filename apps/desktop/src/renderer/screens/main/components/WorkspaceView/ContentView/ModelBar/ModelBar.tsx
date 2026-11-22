@@ -11,6 +11,7 @@ import {
 	LuHistory,
 	LuListTodo,
 	LuMessagesSquare,
+	LuPlay,
 	LuUserCog,
 } from "react-icons/lu";
 import {
@@ -23,9 +24,11 @@ import { useRuntimeAvailability } from "renderer/stores/model-bar/useRuntimeAvai
 import { useAgentSession } from "renderer/stores/tabs/useAgentSession";
 import { GitHubSync } from "./components/GitHubSync";
 import { HistorySheet } from "./components/HistorySheet";
+import { RunSheet } from "./components/RunSheet";
 import { SpecialistsSheet } from "./components/SpecialistsSheet";
 import { TasksSheet } from "./components/TasksSheet";
 import { TeamChatSheet } from "./components/TeamChatSheet";
+import { useRunTargets } from "./hooks/useRunTargets";
 import { useTeamChatTab } from "./hooks/useTeamChatTab";
 import { MODEL_BAR_MODELS, type ModelDescriptor } from "./models";
 
@@ -52,6 +55,8 @@ export function ModelBar() {
 	const teamChat = useTeamChatTab(workspaceId);
 	const [historyOpen, setHistoryOpen] = useState(false);
 	const [specialistsOpen, setSpecialistsOpen] = useState(false);
+	const [runOpen, setRunOpen] = useState(false);
+	const runs = useRunTargets(workspaceId);
 
 	// Close the install dialog once a re-check confirms the tool is now present.
 	useEffect(() => {
@@ -152,6 +157,33 @@ export function ModelBar() {
 						<button
 							type="button"
 							disabled={!ready}
+							onClick={() => setRunOpen(true)}
+							className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+							data-run-button
+						>
+							<LuPlay className="size-3.5" aria-hidden />
+							Run
+							{runs.live.length > 0 && (
+								<span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
+									<span
+										className="size-1.5 rounded-full bg-emerald-500"
+										aria-hidden
+									/>
+									{runs.live.length}
+								</span>
+							)}
+						</button>
+					</TooltipTrigger>
+					<TooltipContent side="bottom" showArrow={false}>
+						Start the dev server, app or commands for this project, preview it,
+						and read the logs
+					</TooltipContent>
+				</Tooltip>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<button
+							type="button"
+							disabled={!ready}
 							onClick={() => setSpecialistsOpen(true)}
 							className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
 						>
@@ -244,6 +276,13 @@ export function ModelBar() {
 				workspaceId={workspaceId}
 				open={chatOpen}
 				onOpenChange={setChatOpen}
+			/>
+
+			<RunSheet
+				workspaceId={workspaceId}
+				open={runOpen}
+				onOpenChange={setRunOpen}
+				runs={runs}
 			/>
 
 			<SpecialistsSheet

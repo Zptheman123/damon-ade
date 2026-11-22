@@ -51,6 +51,10 @@ import {
 } from "main/lib/agent-workflow/service";
 import type { TeamAgent } from "main/lib/agent-workflow/tasks";
 import { getSupersetHomeDir } from "main/lib/app-environment";
+import {
+	type Attachment,
+	getAttachment,
+} from "main/lib/attachments/attachments";
 import { localDb } from "main/lib/local-db";
 import {
 	buildTaskHistory,
@@ -111,6 +115,17 @@ const settingsInputSchema = z.object({
 	}),
 	execution: executionSchema.optional(),
 });
+
+/** The attachments a composer sent, by id (unknown ids are dropped). */
+function resolveAttachments(
+	homeDir: string,
+	projectKey: string,
+	ids: string[],
+): Attachment[] {
+	return ids
+		.map((id) => getAttachment(homeDir, projectKey, id))
+		.filter((a): a is Attachment => !!a);
+}
 
 /** A request that explicitly asks for research or current outside facts. */
 export function asksForResearch(description: string): boolean {
@@ -468,6 +483,12 @@ function describeTask(
 		triage: task.triage ?? null,
 		/** Research: "first" (before the work) or "only" (no code changes). */
 		research: task.research ?? null,
+		attachments: (task.attachments ?? []).map((a) => ({
+			id: a.id,
+			name: a.name,
+			kind: a.kind,
+			size: a.size,
+		})),
 		/** A team request: the Coordinator splits it into subtasks. */
 		isRequest: task.isRequest ?? false,
 		/** A team chat: the conversation with the Coordinator, with its plans. */
@@ -785,6 +806,8 @@ export const createWorkflowRouter = (
 					 * code changes), or "none".
 					 */
 					research: z.enum(["auto", "first", "only", "none"]).default("auto"),
+					/** Attachments added in the composer (their ids). */
+					attachments: z.array(z.string()).max(10).default([]),
 					/** A team request: a Coordinator splits it across the specialists (Auto only). */
 					split: z.boolean().default(false),
 					/** "auto": ADE picks from the team's specialists; "none": default workflow. */
@@ -841,6 +864,12 @@ export const createWorkflowRouter = (
 								? "first"
 								: undefined;
 					if (research) routed.research = research;
+					const attached = resolveAttachments(
+						deps.homeDir(),
+						ctx.project.key,
+						input.attachments,
+					);
+					if (attached.length) routed.attachments = attached;
 					saveTask(ctx.project, routed);
 					const task = input.useHistory
 						? withHistory(ctx.project, routed, [])
@@ -1015,6 +1044,7 @@ export const createWorkflowRouter = (
 				z.object({
 					workspaceId: z.string(),
 					message: z.string().trim().min(1).max(20_000),
+					attachments: z.array(z.string()).max(10).default([]),
 				}),
 			)
 			.mutation(({ input }) =>
@@ -1032,13 +1062,21 @@ export const createWorkflowRouter = (
 							maxEscalations: execution.maxEscalations,
 						},
 					});
+					const attached = resolveAttachments(
+						deps.homeDir(),
+						ctx.project.key,
+						input.attachments,
+					);
 					const chat: TaskRecord = {
 						...created,
+						...(attached.length ? { attachments: attached } : {}),
 						isRequest: true,
 						chat: [
 							{
 								role: "user",
-								text: input.message,
+								text: attached.length
+									? `${input.message}\n\n(Attached: ${attached.map((a) => a.name).join(", ")})`
+									: input.message,
 								at: new Date().toISOString(),
 							},
 						],
@@ -1061,7 +1099,10 @@ export const createWorkflowRouter = (
 		/** Team chat: the user's next message ("go" starts the plan). */
 		chatSay: publicProcedure
 			.input(
-				taskInput.extend({ message: z.string().trim().min(1).max(20_000) }),
+				taskInput.extend({
+					message: z.string().trim().min(1).max(20_000),
+					attachments: z.array(z.string()).max(10).default([]),
+				}),
 			)
 			.mutation(({ input }) =>
 				guarded(async () => {
@@ -1070,7 +1111,16 @@ export const createWorkflowRouter = (
 					});
 					const task = await deps
 						.controller()
-						.chatSay(ctx.project, input.slug, input.message);
+						.chatSay(
+							ctx.project,
+							input.slug,
+							input.message,
+							resolveAttachments(
+								deps.homeDir(),
+								ctx.project.key,
+								input.attachments,
+							),
+						);
 					return { state: task.state, stateReason: task.stateReason ?? null };
 				}),
 			),

@@ -190,6 +190,7 @@ export function TabPane({
 					{showComposer && (
 						<TerminalComposer
 							paneId={paneId}
+							workspaceId={workspaceId}
 							placeholder={
 								tabTitle === "Team chat"
 									? "Message the Coordinator… (Enter sends, Shift+Enter for a new line)"

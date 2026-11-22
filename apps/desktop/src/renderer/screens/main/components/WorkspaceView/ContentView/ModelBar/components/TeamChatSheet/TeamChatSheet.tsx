@@ -18,6 +18,10 @@ import { Textarea } from "@superset/ui/textarea";
 import { useEffect, useRef, useState } from "react";
 import { LuBot, LuMessagesSquare, LuSendHorizontal } from "react-icons/lu";
 import { electronTrpc } from "renderer/lib/electron-trpc";
+import { AttachmentTray } from "renderer/screens/main/components/WorkspaceView/shared/composer/AttachmentTray";
+import { ComposerTools } from "renderer/screens/main/components/WorkspaceView/shared/composer/ComposerTools";
+import { useComposerAttachments } from "renderer/screens/main/components/WorkspaceView/shared/composer/useComposerAttachments";
+import { useVoiceDictation } from "renderer/screens/main/components/WorkspaceView/shared/composer/useVoiceDictation";
 import { PlanCard } from "./components/PlanCard";
 import { SubtaskProgress } from "./components/SubtaskProgress";
 import { STATE_LABELS, type TaskView } from "./types";
@@ -115,10 +119,17 @@ export function TeamChatSheet({
 	const refresh = () =>
 		void utils.workflow.getProjectTasks.invalidate({ workspaceId });
 	const onError = (err: { message: string }) => toast.error(err.message);
+	const attachments = useComposerAttachments(workspaceId, "team-plans");
+	const voice = useVoiceDictation((text) =>
+		setDraft((current) =>
+			current.trim() ? `${current.trimEnd()} ${text}` : text,
+		),
+	);
 	const startChat = electronTrpc.workflow.startChat.useMutation({
 		onSuccess: (result) => {
 			setSelected(result.slug);
 			setDraft("");
+			attachments.clear();
 			refresh();
 		},
 		onError,
@@ -126,6 +137,7 @@ export function TeamChatSheet({
 	const say = electronTrpc.workflow.chatSay.useMutation({
 		onSuccess: () => {
 			setDraft("");
+			attachments.clear();
 			refresh();
 		},
 		onError,
@@ -139,8 +151,17 @@ export function TeamChatSheet({
 	const send = () => {
 		const message = draft.trim();
 		if (!message || busy || replying) return;
-		if (chat) say.mutate({ workspaceId, slug: chat.slug, message });
-		else startChat.mutate({ workspaceId, message });
+		if (attachments.busy) return;
+		if (chat) {
+			say.mutate({
+				workspaceId,
+				slug: chat.slug,
+				message,
+				attachments: attachments.ids,
+			});
+		} else {
+			startChat.mutate({ workspaceId, message, attachments: attachments.ids });
+		}
 	};
 
 	const problem =
@@ -257,8 +278,15 @@ export function TeamChatSheet({
 				</div>
 
 				<div className="space-y-2 border-t px-4 py-3">
+					<AttachmentTray
+						items={attachments.items}
+						onRemove={attachments.remove}
+					/>
 					<Textarea
 						aria-label="Message to the Coordinator"
+						onPaste={attachments.onPaste}
+						onDrop={attachments.onDrop}
+						onDragOver={(e) => e.preventDefault()}
 						rows={3}
 						value={draft}
 						disabled={started}
@@ -278,7 +306,12 @@ export function TeamChatSheet({
 						}}
 					/>
 					<div className="flex items-center justify-between gap-2">
-						<span className="text-xs text-muted-foreground">
+						<ComposerTools
+							onAttach={() => void attachments.pick()}
+							voice={voice}
+							disabled={started}
+						/>
+						<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
 							{chat
 								? `Coordinator replies: $${chat.spend.usd.toFixed(2)} (API-equivalent estimate; subtasks are in Tasks)`
 								: "Each reply is a short read-only Opus run."}

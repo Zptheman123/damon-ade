@@ -9,7 +9,12 @@ import {
 } from "@superset/ui/select";
 import { Switch } from "@superset/ui/switch";
 import { Textarea } from "@superset/ui/textarea";
-import { useState } from "react";
+import {
+	type ClipboardEvent,
+	type DragEvent,
+	type ReactNode,
+	useState,
+} from "react";
 import { LuListTodo, LuPlay, LuUsers } from "react-icons/lu";
 import { AUTOMATIC, BY_AI, ROUTE_LABELS } from "../../constants";
 import type {
@@ -35,6 +40,13 @@ interface TasksPanelViewProps {
 	actions: TaskActions;
 	/** The team's specialists (optional; empty means the default workflow). */
 	specialists?: SpecialistOption[];
+	/** The composer's attachments and dictation (the container provides them). */
+	composer?: {
+		tray: ReactNode;
+		tools: ReactNode;
+		onPaste: (event: ClipboardEvent) => void;
+		onDrop: (event: DragEvent) => void;
+	};
 }
 
 /**
@@ -53,6 +65,7 @@ export function TasksPanelView({
 	preview,
 	actions,
 	specialists = [],
+	composer,
 }: TasksPanelViewProps) {
 	const [specialist, setSpecialist] = useState("auto");
 	const [route, setRoute] = useState<Route | typeof AUTOMATIC | typeof BY_AI>(
@@ -77,8 +90,12 @@ export function TasksPanelView({
 					<LuListTodo className="size-4 text-muted-foreground" aria-hidden />
 					<p className="text-sm font-semibold">New task</p>
 				</div>
+				{composer?.tray}
 				<Textarea
 					aria-label="Task description"
+					onPaste={composer?.onPaste}
+					onDrop={composer?.onDrop}
+					onDragOver={(event) => composer && event.preventDefault()}
 					className="resize-none"
 					placeholder={
 						split
@@ -89,6 +106,7 @@ export function TasksPanelView({
 					value={description}
 					onChange={(event) => actions.onDescriptionChange(event.target.value)}
 				/>
+				{composer?.tools}
 				{split && (
 					<p className="text-xs text-muted-foreground" data-team-request>
 						A Coordinator (Opus, read-only) splits it into up to 6 subtasks for

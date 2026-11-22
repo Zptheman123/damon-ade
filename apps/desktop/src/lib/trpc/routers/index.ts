@@ -1,5 +1,6 @@
 import type { BrowserWindow } from "electron";
 import { router } from "..";
+import { createAttachmentsRouter } from "./attachments";
 import { createAuthRouter } from "./auth";
 import { createAutoUpdateRouter } from "./auto-update";
 import { createBrowserRouter } from "./browser/browser";
@@ -23,11 +24,13 @@ import { createProjectsRouter } from "./projects";
 import { createRepoUpdateRouter } from "./repo-update";
 import { createResourceMetricsRouter } from "./resource-metrics";
 import { createRingtoneRouter } from "./ringtone";
+import { createRunTargetsRouter } from "./run-targets";
 import { createSettingsRouter } from "./settings";
 import { createSpecialistsRouter } from "./specialists";
 import { createSyncRouter } from "./sync";
 import { createTerminalRouter } from "./terminal";
 import { createUiStateRouter } from "./ui-state";
+import { createVoiceRouter } from "./voice";
 import { createWindowRouter } from "./window";
 import { createWorkflowRouter } from "./workflow";
 import { createWorkspacesRouter } from "./workspaces";
@@ -42,6 +45,9 @@ export const createAppRouter = (getWindow: () => BrowserWindow | null) => {
 		window: createWindowRouter(getWindow),
 		projects: createProjectsRouter(getWindow),
 		projectConfig: createProjectConfigRouter(),
+		attachments: createAttachmentsRouter(),
+		voice: createVoiceRouter(),
+		runTargets: createRunTargetsRouter(),
 		workspaces: createWorkspacesRouter(),
 		terminal: createTerminalRouter(),
 		changes: createChangesRouter(),

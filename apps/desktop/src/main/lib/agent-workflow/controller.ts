@@ -1,6 +1,10 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
+	type Attachment,
+	attachmentsDir,
+} from "main/lib/attachments/attachments";
+import {
 	HISTORY_FILE,
 	readTaskHistory,
 } from "main/lib/project-history/task-history";
@@ -1710,7 +1714,13 @@ export class TaskController {
 					permissionMode,
 					allowedTools,
 					disallowedTools,
-					addDirs: [portablePath(project.tasksDir)],
+					// The task folder, and the user's attached files (read-only use).
+					addDirs: [
+						portablePath(project.tasksDir),
+						...(task.attachments?.length
+							? [attachmentsDir(this.deps.homeDir, project.key)]
+							: []),
+					],
 					agentsJson,
 					sessionId: run.sessionId as string,
 					env: this.deps.env,
@@ -1914,6 +1924,8 @@ ${(run.summary ?? "").trim()}
 				...created,
 				title: sub.title,
 				parentSlug: request.slug,
+				// The request's attachments go to every subtask.
+				attachments: request.attachments,
 				dependsOn: sub.dependsOn.map((index) => slugs[index]),
 				agentName: agent?.name,
 				history: request.history,
@@ -1970,6 +1982,7 @@ ${(run.summary ?? "").trim()}
 		project: ProjectWorkflow,
 		slug: string,
 		text: string,
+		attachments: Attachment[] = [],
 	): Promise<TaskRecord> {
 		const message = text.trim();
 		if (
@@ -1997,8 +2010,17 @@ ${(run.summary ?? "").trim()}
 			if (!message) throw new Error("Write a message first");
 			task.chat = [
 				...task.chat,
-				{ role: "user", text: message, at: this.deps.now().toISOString() },
+				{
+					role: "user",
+					text: attachments.length
+						? `${message}\n\n(Attached: ${attachments.map((a) => a.name).join(", ")})`
+						: message,
+					at: this.deps.now().toISOString(),
+				},
 			];
+			if (attachments.length) {
+				task.attachments = [...(task.attachments ?? []), ...attachments];
+			}
 			// A failed reply is behind us once the user writes again.
 			const last = task.runs[task.runs.length - 1];
 			if (last && last.status !== "succeeded") task.acknowledgedRunId = last.id;

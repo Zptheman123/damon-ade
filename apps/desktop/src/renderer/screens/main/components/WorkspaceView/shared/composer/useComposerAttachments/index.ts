@@ -1,0 +1,1 @@
+export { useComposerAttachments } from "./useComposerAttachments";

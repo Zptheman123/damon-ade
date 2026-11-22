@@ -11,6 +11,7 @@ import {
 	session,
 } from "electron";
 import { makeAppSetup } from "lib/electron-app/factories/app/setup";
+import { hardenWebviews } from "main/lib/webview-security";
 import {
 	DEFAULT_CONFIRM_ON_QUIT,
 	PLATFORM,
@@ -276,6 +277,7 @@ if (!gotTheLock) {
 
 	(async () => {
 		await app.whenReady();
+		hardenWebviews();
 		registerWithMacOSNotificationCenter();
 
 		// Must register on both default session and the app's custom partition

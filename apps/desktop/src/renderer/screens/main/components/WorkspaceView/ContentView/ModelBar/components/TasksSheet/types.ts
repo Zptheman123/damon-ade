@@ -26,6 +26,8 @@ export interface TaskActions {
 		split: boolean;
 		/** Research with the Researcher first, only, when asked, or never. */
 		research: "auto" | "first" | "only" | "none";
+		/** Attachments added in the composer (ids); the container fills these in. */
+		attachments?: string[];
 	}) => void;
 	onStart: (slug: string) => void;
 	/** Open a link (a research source) in the user's browser. */

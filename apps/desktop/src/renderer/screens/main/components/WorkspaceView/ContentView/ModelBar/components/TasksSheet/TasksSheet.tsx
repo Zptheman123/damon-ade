@@ -8,6 +8,10 @@ import {
 import { toast } from "@superset/ui/sonner";
 import { useDeferredValue, useMemo, useState } from "react";
 import { electronTrpc } from "renderer/lib/electron-trpc";
+import { AttachmentTray } from "renderer/screens/main/components/WorkspaceView/shared/composer/AttachmentTray";
+import { ComposerTools } from "renderer/screens/main/components/WorkspaceView/shared/composer/ComposerTools";
+import { useComposerAttachments } from "renderer/screens/main/components/WorkspaceView/shared/composer/useComposerAttachments";
+import { useVoiceDictation } from "renderer/screens/main/components/WorkspaceView/shared/composer/useVoiceDictation";
 import { useLaunchInNewTab } from "../../hooks/useLaunchInNewTab";
 import { TasksPanelView } from "./components/TasksPanelView";
 import type { TaskActions } from "./types";
@@ -86,9 +90,16 @@ export function TasksSheet({
 	};
 	const handlers = { onSuccess: reportState, onError };
 
+	const attachments = useComposerAttachments(workspaceId, "tasks");
+	const voice = useVoiceDictation((text) =>
+		setDescription((current) =>
+			current.trim() ? `${current.trimEnd()} ${text}` : text,
+		),
+	);
 	const createTask = electronTrpc.workflow.createTask.useMutation({
 		onSuccess: (result) => {
 			setDescription("");
+			attachments.clear();
 			if (result.mode === "auto" && result.state === "running") {
 				toast.success("Task started");
 			}
@@ -179,7 +190,12 @@ export function TasksSheet({
 		() => ({
 			busy,
 			onDescriptionChange: setDescription,
-			onCreate: (input) => createTask.mutate({ workspaceId, ...input }),
+			onCreate: (input) =>
+				createTask.mutate({
+					workspaceId,
+					...input,
+					attachments: attachments.ids,
+				}),
 			onOpenUrl: (url) => openUrl.mutate(url),
 			onStart: (slug) => start.mutate({ workspaceId, slug }),
 			onResume: (slug) => resume.mutate({ workspaceId, slug }),
@@ -223,6 +239,7 @@ export function TasksSheet({
 			busy,
 			workspaceId,
 			createTask,
+			attachments.ids,
 			openUrl,
 			start,
 			resume,
@@ -254,6 +271,22 @@ export function TasksSheet({
 					</SheetDescription>
 				</SheetHeader>
 				<TasksPanelView
+					composer={{
+						tray: (
+							<AttachmentTray
+								items={attachments.items}
+								onRemove={attachments.remove}
+							/>
+						),
+						tools: (
+							<ComposerTools
+								onAttach={() => void attachments.pick()}
+								voice={voice}
+							/>
+						),
+						onPaste: attachments.onPaste,
+						onDrop: attachments.onDrop,
+					}}
 					data={data}
 					error={error?.message}
 					checks={checks}

@@ -7,6 +7,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import type { Attachment } from "main/lib/attachments/attachments";
 import type { TaskHistory } from "main/lib/project-history/types";
 import {
 	classifyTask,
@@ -242,6 +243,8 @@ export interface TaskRecord {
 	routeBy?: "ai" | "rules" | "user";
 	/** The AI pathway choice, once made (or why ADE's rules were used). */
 	triage?: TriageDecision;
+	/** Files the user attached (ADE's copies; runs read them). */
+	attachments?: Attachment[];
 	/**
 	 * Research: "first" runs the Researcher before the work; "only" runs it
 	 * and finishes without changing code. Unset: no research.

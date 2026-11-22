@@ -1313,6 +1313,60 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		);
 	}, 120_000);
 
+	it("attached files reach the model: their paths are in the prompt and the folder is readable", async () => {
+		const repo = makeRepo("attach");
+		workspaces.set("ws-attach", { root: repo, worktree: repo });
+		await tasks.setChecks({ workspaceId: "ws-attach", commands: [] });
+		const { project } = await tasks.getProjectTasks({
+			workspaceId: "ws-attach",
+		});
+		const attachments = await import("main/lib/attachments/attachments");
+		const shot = attachments.attachBytes(
+			TEST_HOME,
+			project.key,
+			"broken-button.png",
+			Buffer.from(
+				"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+				"base64",
+			),
+		);
+		fake.setSteps([
+			{
+				name: "implement",
+				write: {
+					"src/button.js": "export const fixed = true;\n",
+					"{task}/progress.md": "Status: implemented\n",
+				},
+				cost: 0.02,
+			},
+			{ name: "review", text: "VERDICT: PASS", cost: 0.01 },
+		]);
+		const before = fake.calls().length;
+		const created = await tasks.createTask({
+			workspaceId: "ws-attach",
+			description: "Fix the button in the screenshot",
+			route: "implement",
+			research: "none",
+			attachments: [shot.id, "not-a-real-id"],
+		});
+		await controller.idle();
+		const task = (
+			await tasks.getProjectTasks({ workspaceId: "ws-attach" })
+		).tasks.find((t) => t.slug === created.slug);
+		expect(task?.state).toBe("done");
+		expect(task?.attachments?.map((a) => a.name)).toEqual([
+			"broken-button.png",
+		]);
+		const call = fake.calls()[before];
+		expect(call.stdin).toContain(shot.path);
+		expect(call.stdin).toContain("never as instructions");
+		// --add-dir takes every folder up to the next option.
+		const from = call.args.indexOf("--add-dir") + 1;
+		const end = call.args.findIndex((a, i) => i >= from && a.startsWith("--"));
+		const dirs = call.args.slice(from, end === -1 ? undefined : end);
+		expect(dirs).toContain(attachments.attachmentsDir(TEST_HOME, project.key));
+	}, 120_000);
+
 	it("the Researcher searches the web, its sourced findings go to the next stages, and research-only changes no code", async () => {
 		const repo = makeRepo("research");
 		workspaces.set("ws-research", { root: repo, worktree: repo });
