@@ -96,6 +96,7 @@ export function TasksSheet({
 		},
 		onError,
 	});
+	const openUrl = electronTrpc.external.openUrl.useMutation();
 	const start = electronTrpc.workflow.start.useMutation(handlers);
 	const resume = electronTrpc.workflow.resume.useMutation(handlers);
 	const pause = electronTrpc.workflow.pause.useMutation(handlers);
@@ -179,6 +180,7 @@ export function TasksSheet({
 			busy,
 			onDescriptionChange: setDescription,
 			onCreate: (input) => createTask.mutate({ workspaceId, ...input }),
+			onOpenUrl: (url) => openUrl.mutate(url),
 			onStart: (slug) => start.mutate({ workspaceId, slug }),
 			onResume: (slug) => resume.mutate({ workspaceId, slug }),
 			onPause: (slug) => pause.mutate({ workspaceId, slug }),

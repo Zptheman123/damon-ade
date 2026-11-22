@@ -39,6 +39,8 @@ export interface TriageDecision {
 	/** Models the AI chose per role, for this task only. */
 	models: Partial<Record<RoleName, Model>>;
 	specialist?: string;
+	/** Current outside facts are needed first (the Researcher runs). */
+	research?: boolean;
 	reason: string;
 }
 
@@ -78,7 +80,13 @@ export function parseTriage(
 				: undefined;
 		const reason =
 			typeof data.reason === "string" ? data.reason.trim().slice(0, 500) : "";
-		return { route, models, specialist, reason: reason || "no reason given" };
+		return {
+			route,
+			models,
+			specialist,
+			research: data.research === true,
+			reason: reason || "no reason given",
+		};
 	}
 	return undefined;
 }
@@ -101,6 +109,8 @@ export function applyTriage(
 	}
 	return {
 		...task,
+		// Research the AI asked for joins the task; one the user chose stays.
+		research: task.research ?? (decision.research ? "first" : undefined),
 		route: decision.route,
 		routeReasons: [`chosen by AI: ${decision.reason}`],
 		roleOverrides: overrides,

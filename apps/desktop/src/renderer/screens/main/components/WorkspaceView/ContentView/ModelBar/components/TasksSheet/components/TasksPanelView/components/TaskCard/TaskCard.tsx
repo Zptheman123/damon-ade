@@ -426,6 +426,7 @@ export function TaskCard({
 								<RunRow
 									key={run.id}
 									run={run}
+									onOpenUrl={actions.onOpenUrl}
 									onOpenSession={
 										run.sessionId &&
 										run.kind !== "checks" &&

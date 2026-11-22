@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
 	HISTORY_FILE,
@@ -46,6 +46,7 @@ import {
 	type TaskLimits,
 	type TaskRecord,
 	type TaskRun,
+	taskDir,
 	withTaskLock,
 } from "./tasks";
 import { commitFiles, mergeCommit } from "./team-git";
@@ -74,6 +75,7 @@ export const STAGE_ROLE: Record<
 	Exclude<ModelStage, "custom" | "triage" | "split">,
 	RoleName
 > = {
+	research: "researcher",
 	quick: "quick",
 	implement: "implementer",
 	plan: "planner",
@@ -386,6 +388,27 @@ export function decideNext(
 			kind: "triage",
 			reason: "choose the pathway and models",
 		};
+	}
+
+	// Research, when asked for (or chosen by the triage): before the work.
+	if (task.research) {
+		const researched = t.runs.some(
+			(run) => run.kind === "research" && run.status === "succeeded",
+		);
+		if (!researched) {
+			return {
+				type: "run",
+				kind: "research",
+				reason: "research current outside facts first",
+			};
+		}
+		if (task.research === "only") {
+			return {
+				type: "done",
+				reason:
+					"research finished; no code was changed (findings in research.md)",
+			};
+		}
 	}
 
 	// Routing for quick tasks that turned out not to be small: the quick run
@@ -1529,6 +1552,7 @@ export class TaskController {
 		);
 		const readOnly =
 			kind === "review" ||
+			kind === "research" ||
 			kind === "triage" ||
 			kind === "split" ||
 			(kind === "custom" && customRole?.access === "read-only");
@@ -1550,6 +1574,9 @@ export class TaskController {
 				? "bypassPermissions"
 				: "acceptEdits";
 		const allowedTools = [
+			// The Researcher's real internet access: Claude Code's own web
+			// search and page reading.
+			...(kind === "research" ? ["WebSearch", "WebFetch"] : []),
 			...(mayRunChecks ? checks.commands.map((c) => `Bash(${c}:*)`) : []),
 			...(readOnly || kind === "plan" || kind === "escalate"
 				? READ_ONLY_GIT
@@ -1566,6 +1593,7 @@ export class TaskController {
 			stagePrompt({
 				stage: kind,
 				task,
+				hasResearch: files.hasResearch,
 				tasksDir: portablePath(project.tasksDir),
 				checks: checks.commands,
 				mayRunChecks,
@@ -1803,6 +1831,17 @@ export class TaskController {
 
 			if (run.kind === "triage") {
 				this.applyTriageResult(project, task, run);
+			}
+			// The Researcher's findings, for every later stage to read.
+			if (run.kind === "research" && run.status === "succeeded") {
+				writeFileSync(
+					join(taskDir(project, task.slug), "research.md"),
+					`# Research
+
+${(run.summary ?? "").trim()}
+`,
+					"utf8",
+				);
 			}
 			if (run.kind === "split" && run.status === "succeeded") {
 				if (task.chat) {

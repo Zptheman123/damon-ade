@@ -29,6 +29,12 @@ const BUILT_IN_ROLES: Record<
 	RoleName,
 	{ responsibility: string; runs: string; files: string }
 > = {
+	researcher: {
+		responsibility:
+			"Finds current, sourced facts (official docs, versions, how others solved it) with web search and page reading.",
+		runs: "when you ask for research, or when the task needs current outside facts",
+		files: "read-only; web search and page reading",
+	},
 	planner: {
 		responsibility:
 			"Breaks the task down, records decisions and acceptance criteria.",
@@ -80,6 +86,7 @@ function withTemplateRoles(
 const NONE = "__none__";
 
 const BUILT_IN_ROLE_LABELS: Record<RoleName, string> = {
+	researcher: "Researcher",
 	planner: "Planner",
 	architect: "Architect",
 	implementer: "Implementer",

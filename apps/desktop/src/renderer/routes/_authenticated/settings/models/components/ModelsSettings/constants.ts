@@ -1,6 +1,12 @@
 /** Mirrors ROLE_NAMES / EFFORT_LEVELS in main/lib/agent-workflow/workflow-settings. */
 export const ROLES = [
 	{
+		name: "researcher",
+		label: "Researcher",
+		description:
+			"Finds current, sourced facts with web search and page reading; read-only",
+	},
+	{
 		name: "planner",
 		label: "Planner",
 		description: "Plans complex tasks before any code is written",

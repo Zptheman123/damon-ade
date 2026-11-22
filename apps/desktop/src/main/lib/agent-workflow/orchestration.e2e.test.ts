@@ -163,6 +163,7 @@ describe.if(usableBash)("multi-model workflow in any project", () => {
 			"ade-implementer",
 			"ade-planner",
 			"ade-quick",
+			"ade-researcher",
 			"ade-reviewer",
 		]);
 		expect(agents["ade-planner"].model).toBe("opus");

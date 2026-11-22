@@ -9,10 +9,12 @@ import { RunStatusIcon } from "./components/RunStatusIcon";
 interface RunRowProps {
 	run: RunView;
 	onOpenSession?: () => void;
+	/** Open a research source in the user's browser. */
+	onOpenUrl?: (url: string) => void;
 }
 
 /** One run of a task: what ran, on which model, how it ended, what it cost. */
-export function RunRow({ run, onOpenSession }: RunRowProps) {
+export function RunRow({ run, onOpenSession, onOpenUrl }: RunRowProps) {
 	const observed = run.observedModels.filter((model) => model !== run.model);
 	const cost = runCostLabel(run);
 	const failedChecks = (run.checks ?? []).filter(
@@ -118,6 +120,24 @@ export function RunRow({ run, onOpenSession }: RunRowProps) {
 							</Button>
 						)}
 					</div>
+					{run.sources.length > 0 && (
+						<ul className="space-y-0.5 pt-0.5" data-research-sources>
+							{run.sources.map((source) => (
+								<li key={source.url} className="truncate">
+									<button
+										type="button"
+										title={source.url}
+										onClick={() => onOpenUrl?.(source.url)}
+										className="text-left text-primary underline-offset-2 hover:underline"
+									>
+										{source.title === source.url
+											? source.url.replace(/^https?:\/\//, "")
+											: source.title}
+									</button>
+								</li>
+							))}
+						</ul>
+					)}
 					{run.error && (
 						<p className="break-words text-destructive">
 							{run.failure ? `${run.failure}: ` : ""}

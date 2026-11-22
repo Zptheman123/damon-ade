@@ -112,6 +112,37 @@ const settingsInputSchema = z.object({
 	execution: executionSchema.optional(),
 });
 
+/** A request that explicitly asks for research or current outside facts. */
+export function asksForResearch(description: string): boolean {
+	return /\b(research|look up|look into|investigate|latest version|current (docs|documentation|version|api)|official (docs|documentation)|compare (libraries|options|frameworks)|which (library|framework|service) should)\b/i.test(
+		description,
+	);
+}
+
+/** The URLs a research run cites, in order, without duplicates. */
+export function researchSources(
+	summary: string | undefined,
+): Array<{ url: string; title: string }> {
+	if (!summary) return [];
+	const seen = new Set<string>();
+	const sources: Array<{ url: string; title: string }> = [];
+	for (const line of summary.split("\n")) {
+		for (const match of line.matchAll(/https?:\/\/[^\s)>\]"'`]+/g)) {
+			const url = match[0].replace(/[.,;:]+$/, "");
+			if (seen.has(url)) continue;
+			seen.add(url);
+			const title = line
+				.replace(match[0], "")
+				.replace(/^[\s*\-\d.]+/, "")
+				.replace(/[\s—–:([]+$/, "")
+				.replace(/\[|\]\(|\)/g, "")
+				.trim();
+			sources.push({ url, title: title || url });
+		}
+	}
+	return sources.slice(0, 20);
+}
+
 function localDay(date: Date): string {
 	return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
 }
@@ -435,6 +466,8 @@ function describeTask(
 		routeBy: task.routeBy ?? null,
 		/** The AI pathway choice, once made. */
 		triage: task.triage ?? null,
+		/** Research: "first" (before the work) or "only" (no code changes). */
+		research: task.research ?? null,
 		/** A team request: the Coordinator splits it into subtasks. */
 		isRequest: task.isRequest ?? false,
 		/** A team chat: the conversation with the Coordinator, with its plans. */
@@ -476,6 +509,8 @@ function describeTask(
 			verdict: run.verdict ?? null,
 			checks: run.checks ?? null,
 			summary: run.summary ? run.summary.slice(-1500) : null,
+			/** A research run's sources: the web pages it cites. */
+			sources: run.kind === "research" ? researchSources(run.summary) : [],
 		})),
 	};
 }
@@ -744,6 +779,12 @@ export const createWorkflowRouter = (
 					useHistory: z.boolean().default(true),
 					/** Let a short AI run choose the pathway and models (Auto only). */
 					aiRouting: z.boolean().default(false),
+					/**
+					 * Research with the Researcher (web search): "auto" when the request
+					 * asks for it (or the pathway choice does), "first", or "only" (no
+					 * code changes), or "none".
+					 */
+					research: z.enum(["auto", "first", "only", "none"]).default("auto"),
 					/** A team request: a Coordinator splits it across the specialists (Auto only). */
 					split: z.boolean().default(false),
 					/** "auto": ADE picks from the team's specialists; "none": default workflow. */
@@ -793,6 +834,13 @@ export const createWorkflowRouter = (
 										...withSpecialist,
 										routeBy: input.route ? "user" : "rules",
 									};
+					const research =
+						input.research === "first" || input.research === "only"
+							? input.research
+							: input.research === "auto" && asksForResearch(input.description)
+								? "first"
+								: undefined;
+					if (research) routed.research = research;
 					saveTask(ctx.project, routed);
 					const task = input.useHistory
 						? withHistory(ctx.project, routed, [])

@@ -24,8 +24,12 @@ export interface TaskActions {
 		aiRouting: boolean;
 		/** A team request: a Coordinator splits it across the specialists. */
 		split: boolean;
+		/** Research with the Researcher first, only, when asked, or never. */
+		research: "auto" | "first" | "only" | "none";
 	}) => void;
 	onStart: (slug: string) => void;
+	/** Open a link (a research source) in the user's browser. */
+	onOpenUrl?: (url: string) => void;
 	onResume: (slug: string) => void;
 	onPause: (slug: string) => void;
 	onCancel: (slug: string) => void;

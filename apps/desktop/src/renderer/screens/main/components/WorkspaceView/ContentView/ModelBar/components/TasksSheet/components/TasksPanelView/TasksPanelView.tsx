@@ -61,6 +61,9 @@ export function TasksPanelView({
 	const [mode, setMode] = useState<Mode>("auto");
 	const [useHistory, setUseHistory] = useState(true);
 	const [teamRequest, setTeamRequest] = useState(false);
+	const [research, setResearch] = useState<"auto" | "first" | "only" | "none">(
+		"auto",
+	);
 	const split = teamRequest && mode === "auto";
 	const tasks = data?.tasks ?? [];
 	const bySlug = new Map(tasks.map((t) => [t.slug, t]));
@@ -155,6 +158,32 @@ export function TasksPanelView({
 							</Label>
 						</div>
 					)}
+					{!split && (
+						<div className="space-y-1">
+							<Label className="text-xs">Research</Label>
+							<Select
+								value={research}
+								onValueChange={(value) =>
+									setResearch(value as "auto" | "first" | "only" | "none")
+								}
+							>
+								<SelectTrigger
+									className="h-8 w-[180px] text-xs"
+									aria-label="Research"
+								>
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="auto">When needed</SelectItem>
+									<SelectItem value="first">Research first</SelectItem>
+									<SelectItem value="only">
+										Research only (no code changes)
+									</SelectItem>
+									<SelectItem value="none">No research</SelectItem>
+								</SelectContent>
+							</Select>
+						</div>
+					)}
 					{specialists.length > 0 && !split && (
 						<div className="space-y-1">
 							<Label className="text-xs">Specialist</Label>
@@ -202,6 +231,7 @@ export function TasksPanelView({
 								useHistory: historyAvailable > 0 && useHistory,
 								specialist,
 								split,
+								research,
 							})
 						}
 					>

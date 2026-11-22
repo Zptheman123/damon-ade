@@ -14,6 +14,7 @@ describe("workflow roles", () => {
 			WORKFLOW_SUBAGENTS.map((agent) => [agent.name, agent.model]),
 		);
 		expect(models).toEqual({
+			researcher: "sonnet",
 			planner: "opus",
 			architect: "fable",
 			implementer: "sonnet",
@@ -52,6 +53,7 @@ describe("buildAgentsDefinition", () => {
 			"ade-implementer",
 			"ade-planner",
 			"ade-quick",
+			"ade-researcher",
 			"ade-reviewer",
 		]);
 		// The fields Claude Code 2.1.193 validates for --agents.

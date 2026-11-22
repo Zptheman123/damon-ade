@@ -21,6 +21,7 @@ import { isPlausibleModel } from "./workflow-check";
  */
 
 export const ROLE_NAMES = [
+	"researcher",
 	"planner",
 	"architect",
 	"implementer",

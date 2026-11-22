@@ -190,6 +190,7 @@ export function findTemplate(
 // ------------------------------------------------------------- validation
 
 const BASE_ROLE_LABELS: Record<RoleName, string> = {
+	researcher: "Researcher",
 	planner: "Planner",
 	architect: "Architect",
 	implementer: "Implementer",

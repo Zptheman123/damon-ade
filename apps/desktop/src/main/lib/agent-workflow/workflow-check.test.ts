@@ -37,6 +37,7 @@ describe("checkAgentsFile", () => {
 		expect(
 			Object.fromEntries(check.roles.map((r) => [r.name, r.model])),
 		).toEqual({
+			researcher: "sonnet",
 			planner: "opus",
 			architect: "fable",
 			implementer: "sonnet",

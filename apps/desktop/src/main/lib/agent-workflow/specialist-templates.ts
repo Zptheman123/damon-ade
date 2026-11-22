@@ -29,15 +29,20 @@ import type { RoleName } from "./workflow-settings";
 type ModelAlias = "haiku" | "sonnet" | "opus" | "fable";
 type Preset = [ModelAlias, EffortLevel, string];
 
+/**
+ * The five workflow roles every template sets. The Researcher is not
+ * preset: it inherits the global default (Sonnet, medium, read-only web
+ * research), which suits every specialty.
+ */
 function roles(
-	preset: Record<RoleName, Preset>,
-): Record<RoleName, RoleOverride> {
+	preset: Record<Exclude<RoleName, "researcher">, Preset>,
+): Partial<Record<RoleName, RoleOverride>> {
 	return Object.fromEntries(
 		Object.entries(preset).map(([role, [model, effort, instructions]]) => [
 			role,
 			{ model, effort, instructions },
 		]),
-	) as Record<RoleName, RoleOverride>;
+	) as Partial<Record<RoleName, RoleOverride>>;
 }
 
 const VERDICT_OUTPUT =

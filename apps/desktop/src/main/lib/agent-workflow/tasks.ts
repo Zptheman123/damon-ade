@@ -39,6 +39,8 @@ export const MODEL_STAGES = [
 	"custom",
 	/** The AI pathway choice before an Auto task starts (see triage.ts). */
 	"triage",
+	/** Web research by the Researcher (read-only), before planning. */
+	"research",
 	/** A team request's Coordinator, which splits it into subtasks. */
 	"split",
 ] as const;
@@ -240,6 +242,11 @@ export interface TaskRecord {
 	routeBy?: "ai" | "rules" | "user";
 	/** The AI pathway choice, once made (or why ADE's rules were used). */
 	triage?: TriageDecision;
+	/**
+	 * Research: "first" runs the Researcher before the work; "only" runs it
+	 * and finishes without changing code. Unset: no research.
+	 */
+	research?: "first" | "only";
 	/** A team request: split into subtasks for the team's specialists. */
 	isRequest?: boolean;
 	/** For a team request: its subtasks, in the order they run. */
@@ -408,6 +415,8 @@ export function listTaskRecords(project: ProjectWorkflow): TaskRecord[] {
 /** What the agents have written in the task folder. */
 export interface TaskFiles {
 	hasPlan: boolean;
+	/** research.md: the Researcher's sourced findings for this task. */
+	hasResearch?: boolean;
 	/** plan.md has a non-empty "Questions for the user" section. */
 	planQuestions: string[];
 	progressStatus?: string;
@@ -419,6 +428,7 @@ export function readTaskFiles(
 	slug: string,
 ): TaskFiles {
 	const dir = taskDir(project, slug);
+	const hasResearch = existsSync(join(dir, "research.md"));
 	let plan = "";
 	try {
 		plan = readFileSync(join(dir, "plan.md"), "utf8");
@@ -455,6 +465,7 @@ export function readTaskFiles(
 	}
 
 	return {
+		hasResearch,
 		hasPlan: plan.trim().length > 0,
 		planQuestions,
 		progressStatus,

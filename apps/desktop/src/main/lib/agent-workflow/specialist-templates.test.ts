@@ -119,7 +119,12 @@ describe("built-in templates", () => {
 			expect(`${template.id}: ${got}`).toBe(
 				`${template.id}: ${EXPECTED[template.id]}`,
 			);
-			for (const role of ROLE_NAMES) {
+			expect(resolved.roles.researcher).toMatchObject({
+				model: "sonnet",
+				effort: "medium",
+				source: { model: "global", effort: "global" },
+			});
+			for (const role of ROLE_NAMES.filter((r) => r !== "researcher")) {
 				expect(resolved.roles[role].source).toMatchObject({
 					model: "template",
 					effort: "template",
@@ -171,7 +176,7 @@ describe("built-in templates", () => {
 		const ui = BUILT_IN_TEMPLATES.find((t) => t.id === "ui");
 		const ux = BUILT_IN_TEMPLATES.find((t) => t.id === "ux");
 		expect(ui?.instructions).not.toBe(ux?.instructions);
-		for (const role of ROLE_NAMES) {
+		for (const role of ROLE_NAMES.filter((r) => r !== "researcher")) {
 			expect(ui?.roles[role]?.instructions).not.toBe(
 				ux?.roles[role]?.instructions,
 			);

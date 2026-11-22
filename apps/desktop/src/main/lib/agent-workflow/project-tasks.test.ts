@@ -187,6 +187,7 @@ describe("tasks", () => {
 		});
 		const dir = join(project.tasksDir, task.slug);
 		expect(readTaskFiles(project, task.slug)).toEqual({
+			hasResearch: false,
 			hasPlan: false,
 			planQuestions: [],
 			progressStatus: undefined,
@@ -212,6 +213,7 @@ describe("tasks", () => {
 			"utf8",
 		);
 		expect(readTaskFiles(project, task.slug)).toEqual({
+			hasResearch: false,
 			hasPlan: true,
 			planQuestions: ["Keep the old table?", "Which region?"],
 			progressStatus: "blocked",
