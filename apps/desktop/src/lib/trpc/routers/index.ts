@@ -14,6 +14,7 @@ import { createMenuRouter } from "./menu";
 import { createNotificationsRouter } from "./notifications";
 import { createPermissionsRouter } from "./permissions";
 import { createPortsRouter } from "./ports";
+import { createProjectConfigRouter } from "./project-config";
 import {
 	createDefaultProjectHistoryDeps,
 	createProjectHistoryRouter,
@@ -40,6 +41,7 @@ export const createAppRouter = (getWindow: () => BrowserWindow | null) => {
 		cache: createCacheRouter(),
 		window: createWindowRouter(getWindow),
 		projects: createProjectsRouter(getWindow),
+		projectConfig: createProjectConfigRouter(),
 		workspaces: createWorkspacesRouter(),
 		terminal: createTerminalRouter(),
 		changes: createChangesRouter(),

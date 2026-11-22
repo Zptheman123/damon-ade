@@ -47,6 +47,19 @@ function repoName(value: string): string {
  * Tasks run at once. Agents are optional and added later; they inherit the
  * team's repository.
  */
+/** The agent group each project type suggests (the user can change it). */
+const PRESET_FOR_TYPE: Record<string, string> = {
+	website: "web-app",
+	"web-app": "web-app",
+	"desktop-app": "desktop-app",
+	"mobile-app": "mobile-app",
+	game: "game-dev",
+	"backend-api": "backend-service",
+	cli: "minimal",
+	library: "minimal",
+	"data-ai": "minimal",
+};
+
 export function NewCategoryModal() {
 	const isOpen = useNewCategoryModalOpen();
 	const closeModal = useCloseNewCategoryModal();
@@ -68,6 +81,25 @@ export function NewCategoryModal() {
 	const [blankDir, setBlankDir] = useState("");
 	// Default setup: agents with their specialties, added once the team exists.
 	const [preset, setPreset] = useState("none");
+	const [presetTouched, setPresetTouched] = useState(false);
+	// The project type is required; for a local repository ADE suggests one
+	// from its files (nothing in the repository is run).
+	const [projectType, setProjectType] = useState<string>("");
+	const [typeTouched, setTypeTouched] = useState(false);
+	const { data: projectTypes = [] } = electronTrpc.projectConfig.types.useQuery(
+		undefined,
+		{ enabled: isOpen },
+	);
+	const { data: detected } = electronTrpc.projectConfig.detect.useQuery(
+		{ path: localPath.trim() },
+		{ enabled: isOpen && source === "local" && localPath.trim().length > 2 },
+	);
+	const setTypeMutation = electronTrpc.projectConfig.setType.useMutation();
+	useEffect(() => {
+		if (typeTouched || !detected || detected.type === "other") return;
+		setProjectType(detected.type);
+		if (!presetTouched) setPreset(PRESET_FOR_TYPE[detected.type] ?? "none");
+	}, [detected, typeTouched, presetTouched]);
 	const { data: presets = [] } = electronTrpc.specialists.presets.useQuery(
 		undefined,
 		{ enabled: isOpen },
@@ -134,6 +166,20 @@ export function NewCategoryModal() {
 	};
 
 	const openTeam = async (projectId: string, workspaceId: string | null) => {
+		if (projectType) {
+			try {
+				await setTypeMutation.mutateAsync({
+					projectId,
+					type: projectType as Parameters<
+						typeof setTypeMutation.mutateAsync
+					>[0]["type"],
+				});
+			} catch (err) {
+				toast.error(
+					`The team was created, but its project type was not saved: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
+		}
 		if (preset !== "none") {
 			try {
 				const result = await applyPreset.mutateAsync({
@@ -166,6 +212,7 @@ export function NewCategoryModal() {
 
 	const canCreate =
 		!busy &&
+		projectType !== "" &&
 		name.trim().length > 0 &&
 		(source === "local"
 			? localPath.trim().length > 0
@@ -459,9 +506,46 @@ export function NewCategoryModal() {
 					onChange={handlePhoto}
 				/>
 
+				<div className="flex flex-col gap-1.5" data-new-team-type>
+					<Label>Project type</Label>
+					<Select
+						value={projectType}
+						onValueChange={(value) => {
+							setProjectType(value);
+							setTypeTouched(true);
+							if (!presetTouched) setPreset(PRESET_FOR_TYPE[value] ?? "none");
+						}}
+					>
+						<SelectTrigger aria-label="Project type">
+							<SelectValue placeholder="Choose what you are building" />
+						</SelectTrigger>
+						<SelectContent>
+							{projectTypes.map((t) => (
+								<SelectItem key={t.id} value={t.id}>
+									{t.name}
+									{detected?.type === t.id
+										? ` · detected (${detected.framework})`
+										: ""}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+					<p className="text-xs text-muted-foreground">
+						{projectType
+							? projectTypes.find((t) => t.id === projectType)?.description
+							: "It sets up previews, run targets and tools for this kind of project. You can change it later."}
+					</p>
+				</div>
+
 				<div className="flex flex-col gap-1.5" data-new-team-preset>
 					<Label>Start with agents</Label>
-					<Select value={preset} onValueChange={setPreset}>
+					<Select
+						value={preset}
+						onValueChange={(value) => {
+							setPreset(value);
+							setPresetTouched(true);
+						}}
+					>
 						<SelectTrigger aria-label="Start with agents">
 							<SelectValue />
 						</SelectTrigger>

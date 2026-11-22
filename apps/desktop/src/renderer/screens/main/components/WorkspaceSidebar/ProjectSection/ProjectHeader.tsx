@@ -19,6 +19,7 @@ import {
 	LuFolderOpen,
 	LuImage,
 	LuImageOff,
+	LuLayers,
 	LuPalette,
 	LuPencil,
 	LuSettings,
@@ -39,6 +40,7 @@ import { ChangeFolderDialog } from "./ChangeFolderDialog";
 import { CloseProjectDialog } from "./CloseProjectDialog";
 import { DefaultSetupDialog } from "./DefaultSetupDialog";
 import { ProjectThumbnail } from "./ProjectThumbnail";
+import { ProjectTypeDialog } from "./ProjectTypeDialog";
 import { TeamRepoLine } from "./TeamRepoLine";
 
 interface ProjectHeaderProps {
@@ -78,6 +80,7 @@ export function ProjectHeader({
 	const [isCloseDialogOpen, setIsCloseDialogOpen] = useState(false);
 	const [isSetupOpen, setIsSetupOpen] = useState(false);
 	const [isFolderOpen, setIsFolderOpen] = useState(false);
+	const [isTypeOpen, setIsTypeOpen] = useState(false);
 	const rename = useProjectRename(projectId, projectName);
 
 	const closeProject = electronTrpc.projects.close.useMutation({
@@ -243,6 +246,20 @@ export function ProjectHeader({
 							<LuSettings className="size-4 mr-2" strokeWidth={STROKE_WIDTH} />
 							Team Settings
 						</ContextMenuItem>
+						<ContextMenuItem
+							onSelect={() => setIsTypeOpen(true)}
+							disabled={!mainRepoPath}
+						>
+							<LuLayers className="size-4 mr-2" strokeWidth={STROKE_WIDTH} />
+							Project type…
+						</ContextMenuItem>
+						<ContextMenuItem
+							onSelect={() => setIsTypeOpen(true)}
+							disabled={!mainRepoPath}
+						>
+							<LuLayers className="size-4 mr-2" strokeWidth={STROKE_WIDTH} />
+							Project type…
+						</ContextMenuItem>
 						<ContextMenuItem onSelect={() => setIsSetupOpen(true)}>
 							<LuUsers className="size-4 mr-2" strokeWidth={STROKE_WIDTH} />
 							Default setup…
@@ -279,6 +296,12 @@ export function ProjectHeader({
 					open={isCloseDialogOpen}
 					onOpenChange={setIsCloseDialogOpen}
 					onConfirm={handleConfirmClose}
+				/>
+				<ProjectTypeDialog
+					projectId={projectId}
+					teamName={projectName}
+					open={isTypeOpen}
+					onOpenChange={setIsTypeOpen}
 				/>
 				<DefaultSetupDialog
 					projectId={projectId}
@@ -434,7 +457,10 @@ export function ProjectHeader({
 				</ContextMenuContent>
 			</ContextMenu>
 
-			<TeamRepoLine projectId={projectId} />
+			<TeamRepoLine
+				projectId={projectId}
+				onEditType={() => setIsTypeOpen(true)}
+			/>
 
 			<CloseProjectDialog
 				projectName={projectName}
@@ -442,6 +468,12 @@ export function ProjectHeader({
 				open={isCloseDialogOpen}
 				onOpenChange={setIsCloseDialogOpen}
 				onConfirm={handleConfirmClose}
+			/>
+			<ProjectTypeDialog
+				projectId={projectId}
+				teamName={projectName}
+				open={isTypeOpen}
+				onOpenChange={setIsTypeOpen}
 			/>
 			<DefaultSetupDialog
 				projectId={projectId}

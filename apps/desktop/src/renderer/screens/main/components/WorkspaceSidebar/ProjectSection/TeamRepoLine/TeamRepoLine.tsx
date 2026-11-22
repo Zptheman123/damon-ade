@@ -4,6 +4,8 @@ import { TeamMigrationDialog } from "../TeamMigrationDialog";
 
 interface TeamRepoLineProps {
 	projectId: string;
+	/** Open the project type choice. */
+	onEditType?: () => void;
 }
 
 /**
@@ -11,11 +13,19 @@ interface TeamRepoLineProps {
  * A team from before teams had one repository says so, and opens the
  * migration choice; nothing changes until the user picks one.
  */
-export function TeamRepoLine({ projectId }: TeamRepoLineProps) {
+export function TeamRepoLine({ projectId, onEditType }: TeamRepoLineProps) {
 	const [open, setOpen] = useState(false);
 	const { data } = electronTrpc.projects.teamRepository.useQuery(
 		{ projectId },
 		{ staleTime: 60_000, refetchOnWindowFocus: false },
+	);
+	const { data: project } = electronTrpc.projectConfig.get.useQuery(
+		{ projectId },
+		{
+			enabled: !!data?.repoPath,
+			staleTime: 60_000,
+			refetchOnWindowFocus: false,
+		},
 	);
 	if (!data) return null;
 
@@ -33,6 +43,28 @@ export function TeamRepoLine({ projectId }: TeamRepoLineProps) {
 				) : (
 					<p className="text-amber-600">No repository</p>
 				)}
+				{project &&
+					(project.info ? (
+						<button
+							type="button"
+							onClick={onEditType}
+							className="block max-w-full truncate text-left text-muted-foreground hover:text-foreground"
+							title="Change the project type"
+							data-team-type={project.info.id}
+						>
+							{project.info.name}
+							{project.config.framework ? ` · ${project.config.framework}` : ""}
+						</button>
+					) : (
+						<button
+							type="button"
+							onClick={onEditType}
+							className="text-amber-600 underline underline-offset-2 hover:no-underline"
+							data-team-type="unset"
+						>
+							Set the project type (looks like {project.detection.framework})
+						</button>
+					))}
 				{needsChoice && (
 					<button
 						type="button"
