@@ -8,6 +8,8 @@ import {
 	HISTORY_FILE,
 	readTaskHistory,
 } from "main/lib/project-history/task-history";
+import { loadProjectConfig } from "main/lib/project-type/config";
+import { projectPromptNote } from "main/lib/project-type/prompt-note";
 import { checksPassed, loadProjectChecks } from "./checks";
 import {
 	branchChange,
@@ -1598,6 +1600,12 @@ export class TaskController {
 				stage: kind,
 				task,
 				hasResearch: files.hasResearch,
+				projectNote:
+					kind === "research" || kind === "triage"
+						? undefined
+						: projectPromptNote(
+								loadProjectConfig(this.deps.homeDir, project.root),
+							),
 				tasksDir: portablePath(project.tasksDir),
 				checks: checks.commands,
 				mayRunChecks,
