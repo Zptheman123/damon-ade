@@ -18,6 +18,7 @@ import {
 import { LuListTodo, LuPlay, LuUsers } from "react-icons/lu";
 import { AUTOMATIC, BY_AI, ROUTE_LABELS } from "../../constants";
 import type {
+	ApprovalsView,
 	ChecksView,
 	Mode,
 	ProjectTasks,
@@ -29,12 +30,15 @@ import type {
 } from "../../types";
 import { usd } from "../../utils/costLabel";
 import { ChecksSection } from "./components/ChecksSection";
+import { CommandApprovalsSection } from "./components/CommandApprovalsSection";
 import { TaskCard } from "./components/TaskCard";
 
 interface TasksPanelViewProps {
 	data: ProjectTasks | undefined;
 	error?: string;
 	checks: ChecksView | undefined;
+	/** Commands the project's implementing runs may execute. */
+	approvals?: ApprovalsView;
 	description: string;
 	preview: RoutePreview | undefined;
 	actions: TaskActions;
@@ -61,6 +65,7 @@ export function TasksPanelView({
 	data,
 	error,
 	checks,
+	approvals,
 	description,
 	preview,
 	actions,
@@ -295,6 +300,8 @@ export function TasksPanelView({
 				busy={actions.busy}
 				onSave={actions.onSaveChecks}
 			/>
+
+			<CommandApprovalsSection approvals={approvals} actions={actions} />
 
 			<section className="space-y-3">
 				<div className="flex items-center justify-between">

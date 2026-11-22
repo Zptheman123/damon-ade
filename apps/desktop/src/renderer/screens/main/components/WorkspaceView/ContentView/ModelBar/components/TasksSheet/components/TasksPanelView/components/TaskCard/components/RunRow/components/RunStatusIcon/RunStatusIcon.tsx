@@ -4,6 +4,7 @@ import {
 	LuCircleSlash,
 	LuCircleX,
 	LuLoaderCircle,
+	LuShieldAlert,
 } from "react-icons/lu";
 
 /** How a run ended (or that it is still going), as an icon. */
@@ -23,6 +24,10 @@ export function RunStatusIcon({ status }: { status: string }) {
 		return (
 			<LuCircleSlash className="size-3.5 text-muted-foreground" aria-hidden />
 		);
+	}
+	if (status === "blocked") {
+		// Refused by permissions: waiting for the user, not a failure.
+		return <LuShieldAlert className="size-3.5 text-amber-500" aria-hidden />;
 	}
 	if (status === "queued") {
 		return (

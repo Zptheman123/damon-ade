@@ -63,6 +63,11 @@ export function TasksSheet({
 		{ workspaceId },
 		{ enabled: open },
 	);
+	const { data: approvals } =
+		electronTrpc.workflow.getCommandApprovals.useQuery(
+			{ workspaceId },
+			{ enabled: open },
+		);
 	const { data: preview } = electronTrpc.workflow.classify.useQuery(
 		{ description: deferredDescription },
 		{ enabled: open && deferredDescription.length > 0 },
@@ -80,6 +85,7 @@ export function TasksSheet({
 	const refresh = () => {
 		void utils.workflow.getProjectTasks.invalidate({ workspaceId });
 		void utils.workflow.getChecks.invalidate({ workspaceId });
+		void utils.workflow.getCommandApprovals.invalidate({ workspaceId });
 	};
 	/** A launch that could not start comes back as a blocked task: say so. */
 	const reportState = (result: StateResult) => {
@@ -108,6 +114,18 @@ export function TasksSheet({
 		onError,
 	});
 	const openUrl = electronTrpc.external.openUrl.useMutation();
+	const approveCommand = electronTrpc.workflow.approveCommand.useMutation({
+		onSuccess: (approval) => {
+			toast.success(`Approved: ${approval.rule}`);
+			refresh();
+		},
+		onError,
+	});
+	const removeApproval =
+		electronTrpc.workflow.removeCommandApproval.useMutation({
+			onSuccess: refresh,
+			onError,
+		});
 	const start = electronTrpc.workflow.start.useMutation(handlers);
 	const resume = electronTrpc.workflow.resume.useMutation(handlers);
 	const pause = electronTrpc.workflow.pause.useMutation(handlers);
@@ -183,6 +201,8 @@ export function TasksSheet({
 		excludeHistory,
 		clearHistory,
 		setSpecialist,
+		approveCommand,
+		removeApproval,
 	];
 	const busy = mutations.some((mutation) => mutation.isPending);
 
@@ -198,7 +218,11 @@ export function TasksSheet({
 				}),
 			onOpenUrl: (url) => openUrl.mutate(url),
 			onStart: (slug) => start.mutate({ workspaceId, slug }),
-			onResume: (slug) => resume.mutate({ workspaceId, slug }),
+			onResume: (slug, options) =>
+				resume.mutate({ workspaceId, slug, ...options }),
+			onApproveCommand: (input) =>
+				approveCommand.mutate({ workspaceId, ...input }),
+			onRemoveApproval: (id) => removeApproval.mutate({ workspaceId, id }),
 			onPause: (slug) => pause.mutate({ workspaceId, slug }),
 			onCancel: (slug) => cancel.mutate({ workspaceId, slug }),
 			onSetMode: (slug, mode) => setMode.mutate({ workspaceId, slug, mode }),
@@ -241,6 +265,8 @@ export function TasksSheet({
 			createTask,
 			attachments.ids,
 			openUrl,
+			approveCommand,
+			removeApproval,
 			start,
 			resume,
 			pause,
@@ -290,6 +316,7 @@ export function TasksSheet({
 					data={data}
 					error={error?.message}
 					checks={checks}
+					approvals={approvals}
 					description={description}
 					preview={preview}
 					actions={actions}

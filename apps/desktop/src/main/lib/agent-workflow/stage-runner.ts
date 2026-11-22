@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { estimateCost } from "../usage-metrics/pricing";
+import { type PermissionDenial, parseDenials } from "./command-approvals";
 import type { CostState, TaskRun } from "./tasks";
 
 /**
@@ -65,6 +66,11 @@ export interface StageRunResult {
 	failure?: TaskRun["failure"];
 	error?: string;
 	stderrTail: string;
+	/**
+	 * Tool calls the CLI refused (its `result.permission_denials`, which it
+	 * calls the authoritative record). A clean exit says nothing about these.
+	 */
+	permissionDenials?: PermissionDenial[];
 }
 
 export interface StageRunHandle {
@@ -333,6 +339,7 @@ export function startStageRun(
 						).slice(-2000)
 					: undefined,
 				stderrTail: stderr.slice(-4000),
+				permissionDenials: parseDenials(resultLine?.permission_denials),
 			});
 		};
 

@@ -45,6 +45,15 @@ import {
 	validateWorkflowSettings,
 } from "main/lib/agent-workflow";
 import {
+	addCommandApproval,
+	approvalCovers,
+	approvalProblem,
+	approvalRule,
+	describeDenials,
+	loadCommandApprovals,
+	removeCommandApproval,
+} from "main/lib/agent-workflow/command-approvals";
+import {
 	getTaskController,
 	type TaskChangeEvent,
 	workflowEvents,
@@ -379,6 +388,7 @@ function describeTask(
 	probes: Probes,
 ) {
 	const files = readTaskFiles(project, task.slug);
+	const approvals = task.permissionBlock ? loadCommandApprovals(project) : [];
 	const spend = taskSpend(task);
 	const mismatch = identityMismatch(
 		task,
@@ -484,6 +494,30 @@ function describeTask(
 		triage: task.triage ?? null,
 		/** Research: "first" (before the work) or "only" (no code changes). */
 		research: task.research ?? null,
+		/** Commands the last implementing run was refused, waiting for approval. */
+		permissionBlock: task.permissionBlock
+			? {
+					runId: task.permissionBlock.runId,
+					kind: task.permissionBlock.kind,
+					cwd: task.permissionBlock.cwd,
+					at: task.permissionBlock.at,
+					operations: describeDenials(task.permissionBlock.denials).map(
+						(op) => ({
+							...op,
+							approved: approvals.some((ap) => approvalCovers(ap, op)),
+							/** Whether "with any arguments" is allowed for this command. */
+							prefixAllowed:
+								op.approvable &&
+								!!op.command &&
+								!approvalProblem({
+									tool: op.tool,
+									command: op.command,
+									match: "prefix",
+								}),
+						}),
+					),
+				}
+			: null,
 		attachments: (task.attachments ?? []).map((a) => ({
 			id: a.id,
 			name: a.name,
@@ -528,6 +562,8 @@ function describeTask(
 			unpricedModels: run.unpricedModels ?? [],
 			failure: run.failure ?? null,
 			error: run.error ?? null,
+			/** Tool calls the CLI refused in this run (history). */
+			permissionDenials: run.permissionDenials ?? [],
 			verdict: run.verdict ?? null,
 			checks: run.checks ?? null,
 			summary: run.summary ? run.summary.slice(-1500) : null,
@@ -769,6 +805,82 @@ export const createWorkflowRouter = (
 				};
 			}),
 
+		/**
+		 * Commands this project's implementing runs may execute (setup,
+		 * installs), approved one by one. Separate from the checks, which ADE
+		 * runs itself to verify work.
+		 */
+		getCommandApprovals: publicProcedure
+			.input(z.object({ workspaceId: z.string() }))
+			.query(({ input }) => {
+				const ctx = deps.resolveWorkspace(input.workspaceId);
+				const settings = loadWorkflowSettings(deps.homeDir());
+				return {
+					approvals: loadCommandApprovals(ctx.project).map((a) => ({
+						...a,
+						rule: approvalRule(a),
+					})),
+					/** "edits": agents may not run commands at all (Settings). */
+					commandsAllowed: settings.execution.permissions !== "edits",
+				};
+			}),
+
+		/** Approve one command (exactly, or with extra arguments where safe). */
+		approveCommand: publicProcedure
+			.input(
+				z.object({
+					workspaceId: z.string(),
+					tool: z.enum(["Bash", "PowerShell"]),
+					command: z.string().min(1).max(300),
+					match: z.enum(["exact", "prefix"]).default("exact"),
+					cwd: z.string().max(1000).optional(),
+					slug: z.string().optional(),
+				}),
+			)
+			.mutation(({ input }) =>
+				guarded(() => {
+					const ctx = deps.resolveWorkspace(input.workspaceId);
+					const approval = addCommandApproval(ctx.project, {
+						tool: input.tool,
+						command: input.command,
+						match: input.match,
+						cwd: input.cwd,
+						fromTask: input.slug,
+					});
+					deps.events.emit("task-changed", {
+						projectKey: ctx.project.key,
+						slug: input.slug ?? "",
+					});
+					return { ...approval, rule: approvalRule(approval) };
+				}),
+			),
+
+		/** Why a command could not be approved, before the user submits it. */
+		checkCommandApproval: publicProcedure
+			.input(
+				z.object({
+					tool: z.string(),
+					command: z.string().max(1000),
+					match: z.enum(["exact", "prefix"]),
+				}),
+			)
+			.query(({ input }) => ({
+				problem: approvalProblem(input) ?? null,
+				rule: approvalProblem(input)
+					? null
+					: approvalRule(input as Parameters<typeof approvalRule>[0]),
+			})),
+
+		removeCommandApproval: publicProcedure
+			.input(z.object({ workspaceId: z.string(), id: z.string() }))
+			.mutation(({ input }) =>
+				guarded(() => {
+					const ctx = deps.resolveWorkspace(input.workspaceId);
+					removeCommandApproval(ctx.project, input.id);
+					return { ok: true };
+				}),
+			),
+
 		/** Save and approve the commands ADE runs to verify every task. */
 		setChecks: publicProcedure
 			.input(
@@ -986,13 +1098,22 @@ export const createWorkflowRouter = (
 			}),
 		),
 
-		resume: publicProcedure.input(taskInput).mutation(({ input }) =>
-			guarded(async () => {
-				const { ctx } = taskFor(input.workspaceId, input.slug);
-				const task = await deps.controller().resume(ctx.project, input.slug);
-				return { state: task.state, stateReason: task.stateReason ?? null };
-			}),
-		),
+		resume: publicProcedure
+			.input(
+				taskInput.extend({
+					/** Retry a permission-blocked step although nothing new was approved. */
+					retryWithoutApproval: z.boolean().optional(),
+				}),
+			)
+			.mutation(({ input }) =>
+				guarded(async () => {
+					const { ctx } = taskFor(input.workspaceId, input.slug);
+					const task = await deps.controller().resume(ctx.project, input.slug, {
+						retryWithoutApproval: input.retryWithoutApproval,
+					});
+					return { state: task.state, stateReason: task.stateReason ?? null };
+				}),
+			),
 
 		/** Pause and Cancel always work, from any worktree of the project. */
 		pause: publicProcedure.input(taskInput).mutation(({ input }) =>

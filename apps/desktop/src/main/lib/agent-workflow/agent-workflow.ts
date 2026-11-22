@@ -60,7 +60,13 @@ To escalate:
    - **Question:** the one decision you need
 2. In progress.md, set Status to \`blocked\` and record the report path under Next action.
 
-Never paste the whole conversation into a report.`;
+Never paste the whole conversation into a report.
+
+## When a command is refused ("requires approval")
+A refused command is a permission the user grants, not a problem to escalate or solve. Do not write an escalation report for it, and do not work around it (no other shell, wrapper, script file or alternate route).
+- If the work cannot be finished without it: do what you can without it, set progress.md Status to \`blocked\`, and list each refused command exactly as you ran it under Next action. ADE pauses the task and shows the user those commands to approve.
+- If the command was optional and the work is finished: set Status to \`implemented\` as usual and mention the refused command.
+- Run one plain command per call (no \`&&\`, \`;\` or pipes): each part is approved on its own.`;
 
 export const PLAN_FORMAT = `## plan.md format
 \`\`\`

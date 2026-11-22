@@ -30,6 +30,7 @@ import {
 import type { Route, TaskActions, TaskView } from "../../../../types";
 import { taskCostLabel, usd } from "../../../../utils/costLabel";
 import { Detail } from "./components/Detail";
+import { PermissionBlockPanel } from "./components/PermissionBlockPanel";
 import { RunRow } from "./components/RunRow";
 import { TaskHistory } from "./components/TaskHistory";
 
@@ -210,6 +211,15 @@ export function TaskCard({
 					</p>
 				)}
 
+				{task.permissionBlock && !task.isRequest && (
+					<PermissionBlockPanel
+						task={task}
+						block={task.permissionBlock}
+						actions={actions}
+						disabled={busy || elsewhere}
+					/>
+				)}
+
 				<TaskHistory
 					task={task}
 					actions={actions}
@@ -266,7 +276,7 @@ export function TaskCard({
 								{task.pauseRequested ? "Pausing…" : "Pause"}
 							</Button>
 						)}
-						{stopped && (
+						{stopped && !task.permissionBlock && (
 							<Button
 								size="sm"
 								disabled={busy || elsewhere || budgetSpent}

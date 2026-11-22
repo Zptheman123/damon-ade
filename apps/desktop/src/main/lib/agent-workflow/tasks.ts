@@ -14,6 +14,7 @@ import {
 	slugForTask,
 	type TaskRoute,
 } from "shared/utils/task-routing";
+import type { PermissionDenial } from "./command-approvals";
 import type { ProjectWorkflow } from "./project-workflow";
 import type { TaskRoleOverrides } from "./specialists";
 import type { SplitPlan } from "./split";
@@ -131,7 +132,9 @@ export interface TaskRun {
 		| "timeout"
 		| "cancelled"
 		| "error"
-		| "interrupted";
+		| "interrupted"
+		/** Required work was refused by the CLI's permissions (see permissionDenials). */
+		| "permission";
 	error?: string;
 	/** The workflow role that ran (e.g. "Reviewer", or a custom role's name). */
 	role?: string;
@@ -155,6 +158,20 @@ export interface TaskRun {
 	codeState?: string;
 	/** The run's final text, trimmed. */
 	summary?: string;
+	/** Tool calls the CLI refused during the run (its permission_denials). */
+	permissionDenials?: PermissionDenial[];
+	/** Set on runs recorded by a version that reads permission_denials. */
+	denialsChecked?: boolean;
+}
+
+/** Commands an implementing run needed and the CLI refused. */
+export interface PermissionBlock {
+	runId: string;
+	kind: RunKind;
+	/** The folder the run worked in. */
+	cwd: string;
+	at: string;
+	denials: PermissionDenial[];
 }
 
 /** Where the task runs, and the state of the tree when it was created. */
@@ -245,6 +262,12 @@ export interface TaskRecord {
 	triage?: TriageDecision;
 	/** Files the user attached (ADE's copies; runs read them). */
 	attachments?: Attachment[];
+	/**
+	 * Set while the task waits for the user to approve commands its last
+	 * implementing run was refused. Resume retries that run; the planning and
+	 * earlier runs stay as they are.
+	 */
+	permissionBlock?: PermissionBlock;
 	/**
 	 * Research: "first" runs the Researcher before the work; "only" runs it
 	 * and finishes without changing code. Unset: no research.

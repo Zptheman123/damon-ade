@@ -5,6 +5,8 @@ export type TaskView = ProjectTasks["tasks"][number];
 export type RunView = TaskView["runs"][number];
 export type RunKind = keyof TaskView["manualBlockers"];
 export type ChecksView = ElectronRouterOutputs["workflow"]["getChecks"];
+export type ApprovalsView =
+	ElectronRouterOutputs["workflow"]["getCommandApprovals"];
 export type RoutePreview = ElectronRouterOutputs["workflow"]["classify"];
 
 export type Route = "quick" | "implement" | "plan" | "exceptional";
@@ -32,7 +34,19 @@ export interface TaskActions {
 	onStart: (slug: string) => void;
 	/** Open a link (a research source) in the user's browser. */
 	onOpenUrl?: (url: string) => void;
-	onResume: (slug: string) => void;
+	onResume: (
+		slug: string,
+		options?: { retryWithoutApproval?: boolean },
+	) => void;
+	/** Let this project's implementing runs execute one command. */
+	onApproveCommand?: (input: {
+		tool: "Bash" | "PowerShell";
+		command: string;
+		match: "exact" | "prefix";
+		cwd?: string;
+		slug?: string;
+	}) => void;
+	onRemoveApproval?: (id: string) => void;
 	onPause: (slug: string) => void;
 	onCancel: (slug: string) => void;
 	onSetMode: (slug: string, mode: Mode) => void;

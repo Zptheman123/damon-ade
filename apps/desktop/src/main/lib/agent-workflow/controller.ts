@@ -1,4 +1,10 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	existsSync,
+	readdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import {
 	type Attachment,
@@ -11,6 +17,14 @@ import {
 import { loadProjectConfig } from "main/lib/project-type/config";
 import { projectPromptNote } from "main/lib/project-type/prompt-note";
 import { checksPassed, loadProjectChecks } from "./checks";
+import {
+	approvalCovers,
+	approvalRule,
+	describeDenials,
+	legacyPermissionBlocked,
+	loadCommandApprovals,
+	permissionOutcome,
+} from "./command-approvals";
 import {
 	branchChange,
 	captureIdentity,
@@ -45,6 +59,7 @@ import {
 	createTask,
 	getTask,
 	type ModelStage,
+	type PermissionBlock,
 	type RunKind,
 	readTaskFiles,
 	saveTask,
@@ -186,6 +201,104 @@ export function taskSpend(task: TaskRecord): TaskSpend {
 	return spend;
 }
 
+/** Runs that may execute commands to do the work. */
+function executesCommands(run: TaskRun): boolean {
+	return (
+		run.kind === "quick" ||
+		run.kind === "implement" ||
+		run.kind === "build" ||
+		run.kind === "fix" ||
+		(run.kind === "custom" && run.customAccess === "edit")
+	);
+}
+
+function readProgress(
+	project: ProjectWorkflow,
+	slug: string,
+): string | undefined {
+	try {
+		return readFileSync(join(taskDir(project, slug), "progress.md"), "utf8");
+	} catch {
+		return undefined;
+	}
+}
+
+function statusOf(progress: string | undefined): string | undefined {
+	return progress?.match(/^Status:\s*(.+?)\s*$/m)?.[1];
+}
+
+/** Escalation reports in the task folder, with their text. */
+function escalationReports(
+	project: ProjectWorkflow,
+	slug: string,
+): Array<{ name: string; text: string }> {
+	const dir = join(taskDir(project, slug), "escalations");
+	try {
+		return readdirSync(dir)
+			.filter((name) => name.endsWith(".md"))
+			.sort()
+			.map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
+	} catch {
+		return [];
+	}
+}
+
+/** What a run may write that ADE reads afterwards, before it starts. */
+export interface TaskFilesSnapshot {
+	progress?: string;
+	escalations: string[];
+}
+
+function taskFilesSnapshot(
+	project: ProjectWorkflow,
+	slug: string,
+): TaskFilesSnapshot {
+	return {
+		progress: readProgress(project, slug),
+		escalations: escalationReports(project, slug).map((r) => r.name),
+	};
+}
+
+const PERMISSION_RESOLUTION = `
+
+## Resolution
+
+Handled by ADE, not by the Architect: this report is about commands that need the user's approval (a permission), not about the design or the code. ADE paused the task and showed the user the exact commands to approve; once they are approved, Resume retries the implementation. Kept as history.
+`;
+
+/** Close reports about a permission so they never reach the Architect. */
+function closePermissionReports(
+	project: ProjectWorkflow,
+	slug: string,
+	names: (report: { name: string; text: string }) => boolean,
+): string[] {
+	const closed: string[] = [];
+	for (const report of escalationReports(project, slug)) {
+		if (report.text.includes("## Resolution") || !names(report)) continue;
+		appendFileSync(
+			join(taskDir(project, slug), "escalations", report.name),
+			PERMISSION_RESOLUTION,
+			"utf8",
+		);
+		closed.push(report.name);
+	}
+	return closed;
+}
+
+const ABOUT_PERMISSION =
+	/requires approval|permission|not (been )?granted|denied/i;
+
+/** Why the task waits, naming exactly what to approve. */
+export function permissionBlockReason(block: PermissionBlock): string {
+	const ops = describeDenials(block.denials);
+	const named = ops
+		.slice(0, 3)
+		.map((op) => `\`${op.command ?? op.path ?? op.tool}\` (${op.tool})`)
+		.join(", ");
+	const more = ops.length > 3 ? ` and ${ops.length - 3} more` : "";
+	return `Waiting for your approval: the ${block.kind} run was refused permission to run ${named}${more} in ${block.cwd}, so the work is not done. Approve the command in this task, then Resume to retry the ${block.kind}. Planning and earlier work are kept; the Architect is not called for this.`;
+}
+
 const NEEDS_IMPLEMENTER = /Needs implementer/i;
 
 /** A quick run that found the change is too big did not implement it. */
@@ -259,6 +372,14 @@ export function decideNext(
 	if (activeRun(task)) return { type: "wait" };
 	if (task.state === "done" || task.state === "cancelled")
 		return { type: "none" };
+
+	// Required commands were refused: wait for the user's approval.
+	if (task.permissionBlock) {
+		return {
+			type: "pause",
+			reason: permissionBlockReason(task.permissionBlock),
+		};
+	}
 
 	// Budget: over all runs, history included, at their worst case.
 	const spend = taskSpend(task);
@@ -1018,6 +1139,8 @@ export class TaskController {
 	private readonly live = new Map<string, LiveRun>();
 	/** Work in flight, per task (so one task never waits for another). */
 	private pending = new Map<string, Set<Promise<unknown>>>();
+	/** Task files as each running run found them (see finishModelRun). */
+	private snapshots = new Map<string, TaskFilesSnapshot>();
 
 	constructor(private readonly deps: ControllerDeps) {}
 
@@ -1189,13 +1312,41 @@ export class TaskController {
 	 * Resume after a pause or block: the last failure is acknowledged (it may
 	 * be retried once), then the task continues in its mode.
 	 */
-	resume(project: ProjectWorkflow, slug: string): Promise<TaskRecord> {
+	resume(
+		project: ProjectWorkflow,
+		slug: string,
+		options: { retryWithoutApproval?: boolean } = {},
+	): Promise<TaskRecord> {
 		return withTaskLock(project, slug, () => {
 			const task = this.load(project, slug);
 			if (activeRun(task)) throw new Error("This task is already running");
 			if (task.state === "done" || task.state === "cancelled") {
 				throw new Error(`This task is ${task.state}`);
 			}
+			// Waiting for approval: retry only once something was approved (or
+			// the user asks to retry anyway), so a paid run is not spent on the
+			// same refusal.
+			if (task.permissionBlock) {
+				const ops = describeDenials(task.permissionBlock.denials);
+				const approvals = loadCommandApprovals(project);
+				const commandsOff =
+					this.deps.loadSettings().execution.permissions === "edits";
+				const approved = ops.some((op) =>
+					approvals.some((a) => approvalCovers(a, op)),
+				);
+				if ((commandsOff || !approved) && !options.retryWithoutApproval) {
+					task.state = "paused";
+					task.stateReason = commandsOff
+						? "Commands are turned off for agents (Settings → Models → Permissions: edits only), so approved commands are not used. Allow edits and checks there, then Resume."
+						: `Still waiting: none of the refused commands is approved yet. ${permissionBlockReason(task.permissionBlock)}`;
+					saveTask(project, task);
+					this.changed(project, slug);
+					return task;
+				}
+				// Kept on the run (permissionDenials) as history.
+				task.permissionBlock = undefined;
+			}
+			this.reclassifyLegacyPermissionRuns(project, task);
 			const last = task.runs[task.runs.length - 1];
 			if (last && last.status !== "succeeded") task.acknowledgedRunId = last.id;
 			task.pauseRequested = false;
@@ -1585,6 +1736,14 @@ export class TaskController {
 			// search and page reading.
 			...(kind === "research" ? ["WebSearch", "WebFetch"] : []),
 			...(mayRunChecks ? checks.commands.map((c) => `Bash(${c}:*)`) : []),
+			// Commands the user approved for this project's implementing runs
+			// (setup, installs): exact rules, never for reviews or planning.
+			...(!readOnly &&
+			kind !== "plan" &&
+			kind !== "escalate" &&
+			settings.execution.permissions !== "edits"
+				? loadCommandApprovals(project).map(approvalRule)
+				: []),
 			...(readOnly || kind === "plan" || kind === "escalate"
 				? READ_ONLY_GIT
 				: []),
@@ -1769,6 +1928,8 @@ export class TaskController {
 		run.startedAt = this.deps.now().toISOString();
 		saveTask(project, task);
 		this.changed(project, task.slug);
+		// What the run itself writes is compared against this afterwards.
+		this.snapshots.set(run.id, taskFilesSnapshot(project, task.slug));
 
 		this.live.set(run.id, {
 			project,
@@ -1805,10 +1966,16 @@ export class TaskController {
 		continueAfter: boolean,
 	): Promise<TaskRecord | undefined> {
 		this.live.delete(runId);
+		const snapshot = this.snapshots.get(runId);
+		this.snapshots.delete(runId);
 		return withTaskLock(project, slug, () => {
 			const task = getTask(project, slug);
 			const run = task?.runs.find((r) => r.id === runId);
 			if (!task || !run || run.status !== "running") return task;
+			run.denialsChecked = true;
+			if (result.permissionDenials?.length) {
+				run.permissionDenials = result.permissionDenials;
+			}
 
 			run.endedAt = this.deps.now().toISOString();
 			run.exitCode = result.exitCode;
@@ -1846,6 +2013,28 @@ export class TaskController {
 					(run.kind === "custom" && run.customAccess === "read-only")
 				)
 					run.verdict = parseVerdict(result.text);
+			}
+
+			// A clean exit is not a finished step: required work the CLI refused
+			// pauses the task for the user's approval (no retry, no Architect).
+			if (
+				run.status === "succeeded" &&
+				executesCommands(run) &&
+				run.permissionDenials?.length
+			) {
+				const progress = readProgress(project, slug);
+				const freshStatus =
+					snapshot && progress !== snapshot.progress
+						? statusOf(progress)
+						: undefined;
+				if (
+					permissionOutcome({
+						denials: run.permissionDenials,
+						freshStatus,
+					}) === "blocked"
+				) {
+					return this.pauseForPermission(project, task, run, snapshot);
+				}
 			}
 
 			if (run.kind === "triage") {
@@ -1890,6 +2079,80 @@ ${(run.summary ?? "").trim()}
 			}
 			return this.advance(project, task);
 		});
+	}
+
+	/**
+	 * The run ended cleanly but required commands were refused: the step is
+	 * not done. Pause with exactly what to approve. Reports the run wrote
+	 * about the refusal are closed as history, so the Architect is never
+	 * asked to solve a missing permission.
+	 */
+	private pauseForPermission(
+		project: ProjectWorkflow,
+		task: TaskRecord,
+		run: TaskRun,
+		snapshot: TaskFilesSnapshot | undefined,
+	): TaskRecord {
+		const denials = run.permissionDenials ?? [];
+		run.status = "blocked";
+		run.failure = "permission";
+		run.error = `Refused by permissions: ${describeDenials(denials)
+			.map((op) => op.text)
+			.join("; ")}`.slice(0, 2000);
+		const before = new Set(snapshot?.escalations ?? []);
+		closePermissionReports(
+			project,
+			task.slug,
+			(report) => !before.has(report.name),
+		);
+		task.permissionBlock = {
+			runId: run.id,
+			kind: run.kind,
+			cwd: task.identity.worktreePath,
+			at: this.deps.now().toISOString(),
+			denials,
+		};
+		task.state = "paused";
+		task.stateReason = permissionBlockReason(task.permissionBlock);
+		saveTask(project, task);
+		this.changed(project, task.slug);
+		return task;
+	}
+
+	/**
+	 * Runs recorded before ADE read the CLI's permission_denials were taken
+	 * as finished when they had been refused. Only when the task's current
+	 * progress says it is blocked on a permission, and the run's own report
+	 * says so too, the run is re-marked as blocked (its cost and text stay),
+	 * and open reports about the permission are closed as history.
+	 */
+	private reclassifyLegacyPermissionRuns(
+		project: ProjectWorkflow,
+		task: TaskRecord,
+	): boolean {
+		const progress = readProgress(project, task.slug) ?? "";
+		let changed = false;
+		for (const run of task.runs) {
+			if (
+				run.denialsChecked ||
+				run.status !== "succeeded" ||
+				!executesCommands(run) ||
+				!legacyPermissionBlocked(run.summary, progress)
+			) {
+				continue;
+			}
+			run.status = "blocked";
+			run.failure = "permission";
+			run.error =
+				"Recorded as finished by an earlier ADE version; its own report says required commands were refused by permissions.";
+			changed = true;
+		}
+		if (changed) {
+			closePermissionReports(project, task.slug, (report) =>
+				ABOUT_PERMISSION.test(report.text),
+			);
+		}
+		return changed;
 	}
 
 	/**
