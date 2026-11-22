@@ -223,6 +223,7 @@ export function TasksSheet({
 			busy,
 			workspaceId,
 			createTask,
+			openUrl,
 			start,
 			resume,
 			pause,
