@@ -20,6 +20,7 @@ import {
 } from "./identity";
 import { cheaperFallback, resolveRunModel } from "./models";
 import { type ProjectWorkflow, portablePath } from "./project-workflow";
+import { RESEARCH_TEMPLATE_ID } from "./specialist-templates";
 import {
 	applicableCustomRoles,
 	type CustomRole,
@@ -1943,6 +1944,10 @@ ${(run.summary ?? "").trim()}
 					Object.entries(sub.models).map(([role, model]) => [role, { model }]),
 				),
 				specialistId: owner?.id,
+				// The Research Agent's work starts with web research.
+				...(owner?.templateId === RESEARCH_TEMPLATE_ID
+					? { research: "first" as const }
+					: {}),
 				specialistReason: owner
 					? "assigned by the Coordinator"
 					: sub.specialist

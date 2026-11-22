@@ -10,7 +10,7 @@ export interface TeamPreset {
 	id: string;
 	name: string;
 	description: string;
-	/** Built-in template ids, in the order the agents are added. */
+	/** Built-in template ids, in the order the agents are added (every preset ends with a Research Agent). */
 	templates: string[];
 }
 
@@ -32,6 +32,7 @@ export const TEAM_PRESETS: TeamPreset[] = [
 			"devops",
 			"performance",
 			"documentation",
+			"research",
 		],
 	},
 	{
@@ -39,7 +40,15 @@ export const TEAM_PRESETS: TeamPreset[] = [
 		name: "Game development",
 		description:
 			"Gameplay systems with interface, player experience, performance and testing.",
-		templates: ["gamedev", "ui", "ux", "performance", "qa", "documentation"],
+		templates: [
+			"gamedev",
+			"ui",
+			"ux",
+			"performance",
+			"qa",
+			"documentation",
+			"research",
+		],
 	},
 	{
 		id: "mobile-app",
@@ -55,6 +64,7 @@ export const TEAM_PRESETS: TeamPreset[] = [
 			"security",
 			"qa",
 			"performance",
+			"research",
 		],
 	},
 	{
@@ -71,6 +81,7 @@ export const TEAM_PRESETS: TeamPreset[] = [
 			"security",
 			"performance",
 			"devops",
+			"research",
 		],
 	},
 	{
@@ -86,13 +97,14 @@ export const TEAM_PRESETS: TeamPreset[] = [
 			"performance",
 			"qa",
 			"documentation",
+			"research",
 		],
 	},
 	{
 		id: "minimal",
 		name: "Small team",
-		description: "Three agents: frontend, backend and testing.",
-		templates: ["frontend", "backend", "qa"],
+		description: "Four agents: frontend, backend, testing and research.",
+		templates: ["frontend", "backend", "qa", "research"],
 	},
 ];
 

@@ -49,6 +49,7 @@ import {
 	type TaskChangeEvent,
 	workflowEvents,
 } from "main/lib/agent-workflow/service";
+import { RESEARCH_TEMPLATE_ID } from "main/lib/agent-workflow/specialist-templates";
 import type { TeamAgent } from "main/lib/agent-workflow/tasks";
 import { getSupersetHomeDir } from "main/lib/app-environment";
 import {
@@ -860,7 +861,11 @@ export const createWorkflowRouter = (
 					const research =
 						input.research === "first" || input.research === "only"
 							? input.research
-							: input.research === "auto" && asksForResearch(input.description)
+							: input.research === "auto" &&
+									(asksForResearch(input.description) ||
+										listSpecialists(ctx.project).find(
+											(sp) => sp.id === routed.specialistId,
+										)?.templateId === RESEARCH_TEMPLATE_ID)
 								? "first"
 								: undefined;
 					if (research) routed.research = research;

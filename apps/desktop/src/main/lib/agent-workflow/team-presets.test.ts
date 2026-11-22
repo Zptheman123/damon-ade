@@ -11,7 +11,11 @@ describe("team presets", () => {
 			expect(preset.templates.every((id) => ids.has(id))).toBe(true);
 			expect(new Set(preset.templates).size).toBe(preset.templates.length);
 		}
-		expect(findTeamPreset("web-app")?.templates).toHaveLength(11);
+		expect(findTeamPreset("web-app")?.templates).toHaveLength(12);
+		// Every preset brings a Research Agent.
+		for (const preset of TEAM_PRESETS) {
+			expect(preset.templates).toContain("research");
+		}
 		expect(findTeamPreset("game-dev")?.templates[0]).toBe("gamedev");
 	});
 
@@ -30,6 +34,7 @@ describe("team presets", () => {
 			["Frontend Agent", undefined, "create"],
 			["Backend Agent", undefined, "create"],
 			["QA and testing Agent", undefined, "create"],
+			["Research Agent", undefined, "create"],
 		]);
 	});
 
@@ -59,6 +64,7 @@ describe("team presets", () => {
 			["Frontend Agent", "fe", "keep", "s1"],
 			["Backend Agent", "be", "assign", "s2"],
 			["QA and testing Agent", undefined, "create", undefined],
+			["Research Agent", undefined, "create", undefined],
 		]);
 	});
 });

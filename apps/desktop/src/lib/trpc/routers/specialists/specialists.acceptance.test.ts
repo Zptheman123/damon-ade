@@ -1367,6 +1367,59 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		expect(dirs).toContain(attachments.attachmentsDir(TEST_HOME, project.key));
 	}, 120_000);
 
+	it("a task for the Research specialist researches first, with its own Researcher settings", async () => {
+		const repo = makeRepo("research-agent");
+		workspaces.set("ws-ragent", { root: repo, worktree: repo });
+		await tasks.setChecks({ workspaceId: "ws-ragent", commands: [] });
+		await specialists.save({
+			workspaceId: "ws-ragent",
+			specialist: {
+				name: "Research",
+				specialty: "Research",
+				templateId: "research",
+			},
+		});
+		const spec = (await specialists.list({ workspaceId: "ws-ragent" }))
+			.specialists[0];
+		fake.setSteps([
+			{
+				name: "research",
+				text: "## Answer\nUse v2.\n## Sources\n- Release notes — https://example.com/releases",
+				cost: 0.02,
+			},
+			{
+				name: "implement",
+				write: {
+					"src/notes.md": "Use v2.\n",
+					"{task}/progress.md": "Status: implemented\n",
+				},
+				cost: 0.02,
+			},
+			{ name: "review", text: "VERDICT: PASS", cost: 0.01 },
+		]);
+		const before = fake.calls().length;
+		const created = await tasks.createTask({
+			workspaceId: "ws-ragent",
+			// Nothing in the wording asks for research: the specialist does.
+			description: "Write down which major version of the SDK we should use",
+			route: "implement",
+			specialist: spec.id,
+		});
+		await controller.idle();
+		const task = (
+			await tasks.getProjectTasks({ workspaceId: "ws-ragent" })
+		).tasks.find((t) => t.slug === created.slug);
+		expect(task?.research).toBe("first");
+		const kinds = task?.runs.map((r) => r.kind) ?? [];
+		expect(kinds.slice(0, 2)).toEqual(["research", "implement"]);
+		expect(kinds).toContain("review");
+		// "SDK" and "version": the template's Source Check Reviewer runs too.
+		expect(task?.runs.map((r) => r.role)).toContain("Source Check Reviewer");
+		const call = fake.calls()[before];
+		expect(flag(call.args, "--effort")).toBe("high");
+		expect(call.stdin).toContain("Cite a URL for every claim");
+	}, 120_000);
+
 	it("the Researcher searches the web, its sourced findings go to the next stages, and research-only changes no code", async () => {
 		const repo = makeRepo("research");
 		workspaces.set("ws-research", { root: repo, worktree: repo });

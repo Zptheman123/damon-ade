@@ -90,6 +90,7 @@ const EXPECTED: Record<string, string> = {
 	mobile: "opus/medium fable/high sonnet/medium opus/medium haiku/medium",
 	desktop: "opus/high fable/high sonnet/medium opus/medium haiku/medium",
 	gamedev: "opus/high fable/high sonnet/medium opus/medium haiku/medium",
+	research: "opus/medium fable/high sonnet/medium opus/medium haiku/low",
 };
 
 describe("built-in templates", () => {
@@ -119,11 +120,20 @@ describe("built-in templates", () => {
 			expect(`${template.id}: ${got}`).toBe(
 				`${template.id}: ${EXPECTED[template.id]}`,
 			);
-			expect(resolved.roles.researcher).toMatchObject({
-				model: "sonnet",
-				effort: "medium",
-				source: { model: "global", effort: "global" },
-			});
+			// The Research template presets its Researcher; the others inherit it.
+			expect(resolved.roles.researcher).toMatchObject(
+				template.id === "research"
+					? {
+							model: "sonnet",
+							effort: "high",
+							source: { model: "template", effort: "template" },
+						}
+					: {
+							model: "sonnet",
+							effort: "medium",
+							source: { model: "global", effort: "global" },
+						},
+			);
 			for (const role of ROLE_NAMES.filter((r) => r !== "researcher")) {
 				expect(resolved.roles[role].source).toMatchObject({
 					model: "template",
