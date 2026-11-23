@@ -119,11 +119,12 @@ beforeAll(async () => {
 		resolveClaude: () => fake.command,
 		startRun: (spec, onProgress) =>
 			runner.startStageRun(spec, { spawnFn, killTree, onProgress }),
-		runChecks: ({ cwd, commands, signal }) =>
+		runChecks: ({ cwd, commands, signal, continuePast }) =>
 			checks.runChecks({
 				cwd,
 				commands,
 				signal,
+				continuePast,
 				shell: [bash as string, "-c"],
 				spawnFn,
 				killTree,
@@ -260,12 +261,13 @@ describe.if(bash !== null && git !== null)("Auto's dependency audit", () => {
 		const task = await view("ws-fix", created.slug);
 		expect(task.state).toBe("done");
 		expect(task.runs.map((r) => r.kind)).toEqual([
+			"checks",
 			"implement",
 			"deps",
 			"checks",
 			"review",
 		]);
-		expect(task.runs[1].audit?.fixed).toEqual(["vite"]);
+		expect(task.runs[2].audit?.fixed).toEqual(["vite"]);
 		expect(managerCalls).toContain("npm audit fix --ignore-scripts");
 		expect(managerCalls.some((c) => c.includes("--force"))).toBe(false);
 	}, 60_000);

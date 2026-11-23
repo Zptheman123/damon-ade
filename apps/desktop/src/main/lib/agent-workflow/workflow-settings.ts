@@ -103,6 +103,11 @@ export interface ExecutionSettings {
 	 * overwriting uncommitted work and undoing a conflicting merge.
 	 */
 	deliverResult: boolean;
+	/**
+	 * Run a task's checks once before it changes anything; checks that
+	 * already fail then are not counted against it (no fix loops for them).
+	 */
+	checkBaseline: boolean;
 }
 
 export interface RoleRouting {
@@ -144,6 +149,7 @@ export function defaultExecutionSettings(): ExecutionSettings {
 		autoChecks: true,
 		autoResume: true,
 		deliverResult: true,
+		checkBaseline: true,
 	};
 }
 
@@ -331,6 +337,7 @@ export function validateWorkflowSettings(input: unknown): ValidationResult {
 				autoChecks: (execution as ExecutionSettings).autoChecks ?? true,
 				autoResume: (execution as ExecutionSettings).autoResume ?? true,
 				deliverResult: (execution as ExecutionSettings).deliverResult ?? true,
+				checkBaseline: (execution as ExecutionSettings).checkBaseline ?? true,
 			},
 		},
 	};

@@ -118,11 +118,12 @@ beforeAll(async () => {
 		resolveClaude: () => fake.command,
 		startRun: (spec, onProgress) =>
 			runner.startStageRun(spec, { spawnFn, killTree, onProgress }),
-		runChecks: ({ cwd, commands, signal }) =>
+		runChecks: ({ cwd, commands, signal, continuePast }) =>
 			checks.runChecks({
 				cwd,
 				commands,
 				signal,
+				continuePast,
 				shell: [bash as string, "-c"],
 				spawnFn,
 				killTree,

@@ -171,11 +171,12 @@ beforeAll(async () => {
 		resolveClaude: () => (claudeFound ? fake.command : null),
 		startRun: (spec, onProgress) =>
 			m.runner.startStageRun(spec, { spawnFn, killTree, onProgress }),
-		runChecks: ({ cwd, commands, signal }) =>
+		runChecks: ({ cwd, commands, signal, continuePast }) =>
 			m.checks.runChecks({
 				cwd,
 				commands,
 				signal,
+				continuePast,
 				shell: [bash as string, "-c"],
 				spawnFn,
 				killTree,
@@ -256,11 +257,13 @@ describe.if(bash !== null && git !== null)("Auto mode, end to end", () => {
 		);
 		expect(task.runs.map((r) => [r.kind, r.status, r.model])).toEqual([
 			["plan", "succeeded", "claude-opus-5-5"],
+			// Before building: which checks already fail (no model).
+			["checks", "succeeded", null],
 			["build", "succeeded", "claude-sonnet-5-5"],
 			["checks", "succeeded", null],
 			["review", "succeeded", "claude-opus-5-5"],
 		]);
-		expect(task.runs[3].verdict).toBe("PASS");
+		expect(task.runs[4].verdict).toBe("PASS");
 		expect(fake.remainingSteps()).toBe(0);
 
 		// Effort, turns and permissions are set on the processes that ran.
@@ -345,8 +348,8 @@ describe.if(bash !== null && git !== null)("Auto mode, end to end", () => {
 		const task = await taskOf("ws-typo", created.slug);
 		expect(task.route).toBe("quick");
 		expect(task.state).toBe("done");
-		expect(task.runs.map((r) => r.kind)).toEqual(["quick", "checks"]);
-		expect(task.runs[0].model).toBe("claude-haiku-5-5");
+		expect(task.runs.map((r) => r.kind)).toEqual(["checks", "quick", "checks"]);
+		expect(task.runs[1].model).toBe("claude-haiku-5-5");
 		expect(fake.remainingSteps()).toBe(0);
 	}, 30_000);
 
@@ -413,6 +416,7 @@ describe.if(bash !== null && git !== null)("Auto mode, end to end", () => {
 		const task = await taskOf("ws-fix", created.slug);
 		expect(task.state).toBe("done");
 		expect(task.runs.map((r) => `${r.kind}:${r.verdict ?? r.status}`)).toEqual([
+			"checks:succeeded",
 			"implement:succeeded",
 			"checks:succeeded",
 			"review:FAIL",
@@ -443,7 +447,8 @@ describe.if(bash !== null && git !== null)("Auto mode, end to end", () => {
 		expect(task.state).toBe("blocked");
 		expect(task.stateReason).toBe("Checks still fail after 2 correction(s).");
 		expect(task.runs.filter((r) => r.kind === "fix")).toHaveLength(2);
-		expect(task.runs.filter((r) => r.kind === "checks")).toHaveLength(3);
+		// The baseline (passing before the change), then after each attempt.
+		expect(task.runs.filter((r) => r.kind === "checks")).toHaveLength(4);
 		const fixCall = fake.calls().find((c) => c.step === "fix-1");
 		expect(fixCall?.stdin).toContain("expected 2, got 1");
 		expect(fake.remainingSteps()).toBe(0);
@@ -932,12 +937,13 @@ describe.if(bash !== null && git !== null)("release regressions", () => {
 		expect(task.route).toBe("implement");
 		expect(task.state).toBe("done");
 		expect(task.runs.map((r) => r.kind)).toEqual([
+			"checks",
 			"quick",
 			"implement",
 			"checks",
 			"review",
 		]);
-		expect(task.runs[1].model).toBe("claude-sonnet-5-5");
+		expect(task.runs[2].model).toBe("claude-sonnet-5-5");
 		const implementCall = fake
 			.calls()
 			.filter((c) => c.step === "implement")
@@ -1028,7 +1034,7 @@ describe.if(bash !== null && git !== null)("release regressions", () => {
 		await settle();
 		let task = await taskOf("ws-branch", created.slug);
 		// No checks or review ran on the other branch.
-		expect(task.runs.map((r) => r.kind)).toEqual(["implement"]);
+		expect(task.runs.map((r) => r.kind)).toEqual(["checks", "implement"]);
 		expect(task.state).toBe("blocked");
 		expect(task.stateReason).toContain(`runs on branch ${original}`);
 		expect(task.mismatch).toContain("now on experiment");
@@ -1069,7 +1075,7 @@ describe.if(bash !== null && git !== null)("release regressions", () => {
 		expect(task.stateReason).toContain("verify it again");
 		expect(task.moves).toHaveLength(1);
 		// History is kept, but none of it is evidence any more.
-		expect(task.runs.map((r) => r.history)).toEqual([true, true, true]);
+		expect(task.runs.map((r) => r.history)).toEqual([true, true, true, true]);
 		expect(task.next).toEqual({
 			type: "run",
 			kind: "implement",
@@ -1087,6 +1093,7 @@ describe.if(bash !== null && git !== null)("release regressions", () => {
 		expect(
 			task.runs.map((r) => `${r.kind}${r.history ? "(old)" : ""}`),
 		).toEqual([
+			"checks(old)",
 			"implement(old)",
 			"checks(old)",
 			"review(old)",

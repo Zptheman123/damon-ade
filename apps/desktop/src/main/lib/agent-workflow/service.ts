@@ -92,8 +92,15 @@ export function getTaskController(): TaskController {
 		},
 		startRun: (spec, onProgress) =>
 			startStageRun(spec, { killTree, onProgress }),
-		runChecks: ({ cwd, commands, signal }) =>
-			runChecks({ cwd, commands, signal, shell: checkShell(), killTree }),
+		runChecks: ({ cwd, commands, signal, continuePast }) =>
+			runChecks({
+				cwd,
+				commands,
+				signal,
+				continuePast,
+				shell: checkShell(),
+				killTree,
+			}),
 		// Auto's dependency audit: the project's own package manager.
 		runAudit: runAuditCommand(killTree),
 		newId: randomUUID,

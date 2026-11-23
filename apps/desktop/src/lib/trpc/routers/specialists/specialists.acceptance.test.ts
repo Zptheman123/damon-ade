@@ -96,11 +96,12 @@ beforeAll(async () => {
 		resolveClaude: () => fake.command,
 		startRun: (spec, onProgress) =>
 			runner.startStageRun(spec, { spawnFn, killTree, onProgress }),
-		runChecks: ({ cwd, commands, signal }) =>
+		runChecks: ({ cwd, commands, signal, continuePast }) =>
 			checks.runChecks({
 				cwd,
 				commands,
 				signal,
+				continuePast,
 				shell: [bash as string, "-c"],
 				spawnFn,
 				killTree,
@@ -317,7 +318,9 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		expect(task?.specialistReason).toContain("matches Backend");
 		expect(task?.state).toBe("done");
 		// No fix loop of its own: one role run, then the review.
+		// First the checks once, to see what already fails (no model).
 		expect(task?.runs.map((r) => [r.kind, r.role, r.specialist])).toEqual([
+			["checks", null, null],
 			["implement", "Implementer", "Backend"],
 			["checks", null, null],
 			["custom", "API Contract Reviewer", "Backend"],
@@ -375,6 +378,7 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		expect(task?.state).toBe("done");
 		// No API words: the contract reviewer did not run.
 		expect(task?.runs.map((r) => r.kind)).toEqual([
+			"checks",
 			"implement",
 			"checks",
 			"review",

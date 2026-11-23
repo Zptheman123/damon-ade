@@ -404,6 +404,86 @@ function needsImplementer(run: TaskRun): boolean {
 	return run.kind === "quick" && NEEDS_IMPLEMENTER.test(run.summary ?? "");
 }
 
+/** Any implementing run that started, whether or not it succeeded. */
+function implementationStarted(task: TaskRecord): boolean {
+	return task.runs.some(
+		(run) =>
+			IMPLEMENTATION_KINDS.includes(run.kind) &&
+			run.status !== "queued" &&
+			!needsImplementer(run),
+	);
+}
+
+/**
+ * Checks that already failed before the task changed anything (its
+ * baseline checks run). Measured: on Windows, checkouts with CRLF line
+ * endings made the project's lint fail on every file before any change;
+ * counting that against each task starts paid fix loops for nothing.
+ */
+export function preExistingFailures(task: TaskRecord): CheckResult[] {
+	const baseline = task.runs.find(
+		(run) =>
+			run.kind === "checks" && run.baseline && run.status === "succeeded",
+	);
+	return (baseline?.checks ?? []).filter(
+		(check) =>
+			check.exitCode !== 0 &&
+			check.exitCode !== null &&
+			check.exitCode !== 127 &&
+			!check.timedOut &&
+			// Only a failure that says why can be told apart later; one that
+			// could not run (tools not installed yet, no project) is not
+			// "already failing": it counts once the task makes it runnable.
+			check.outputTail.trim() !== "" &&
+			!COULD_NOT_RUN.test(check.outputTail),
+	);
+}
+
+const COULD_NOT_RUN =
+	/command not found|is not recognized as an internal or external command|: not found|cannot find module|err_module_not_found|missing script|could not read package\.json|enoent|no such file or directory/i;
+
+/** Whether every check passed, not counting ones that already failed. */
+export function checksPassedSinceBaseline(
+	task: TaskRecord,
+	results: CheckResult[],
+	commands: string[],
+): boolean {
+	const already = new Set(preExistingFailures(task).map((c) => c.command));
+	return commands.every(
+		(command) =>
+			already.has(command) ||
+			results.some(
+				(r) => r.command === command && r.exitCode === 0 && !r.timedOut,
+			),
+	);
+}
+
+/** What the review is told about checks that already failed. */
+export function preExistingNoteFor(task: TaskRecord): string | undefined {
+	const last = [...task.runs]
+		.reverse()
+		.find((run) => run.kind === "checks" && !run.baseline);
+	// Ones that pass now (the task fixed them) need no mention.
+	const already = preExistingFailures(task).filter((before) => {
+		const now = last?.checks?.find((c) => c.command === before.command);
+		return !now || now.exitCode !== 0 || now.timedOut;
+	});
+	if (!already.length) return undefined;
+	const lines = already.map((before) => {
+		const now = last?.checks?.find((c) => c.command === before.command);
+		const state = !now
+			? "not run after the change"
+			: now.exitCode === 0 && !now.timedOut
+				? "passes now"
+				: "still fails";
+		return `### \`${before.command}\` (${state})\nBefore the change:\n\`\`\`\n${before.outputTail.slice(-800)}\n\`\`\`${now && now.exitCode !== 0 ? `\nAfter the change:\n\`\`\`\n${now.outputTail.slice(-800)}\n\`\`\`` : ""}`;
+	});
+	return `## Checks that already failed before this task
+ADE ran these before the task changed anything, and does not count them against it. FAIL only if this task made them worse or the task is meant to fix them.
+
+${lines.join("\n\n")}`;
+}
+
 /** A succeeded run that implemented (part of) the task. */
 function isImplementation(run: TaskRun): boolean {
 	return (
@@ -745,6 +825,22 @@ export function decideNext(
 				};
 			}
 		}
+		// Note which checks already fail before anything changes (no model
+		// cost), so they do not start fix loops later.
+		if (
+			checks.commands.length > 0 &&
+			(settings.execution.checkBaseline ?? true) &&
+			task.mode === "auto" &&
+			// Not when reconciling earlier work: its failures are not "before".
+			task.evidenceStart === undefined &&
+			!implementationStarted(t) &&
+			!t.runs.some((run) => run.kind === "checks" && run.baseline)
+		) {
+			return {
+				type: "checks",
+				reason: "see which checks already fail before the change",
+			};
+		}
 		const first: ModelStage =
 			task.route === "quick"
 				? "quick"
@@ -871,7 +967,7 @@ export function decideNext(
 				reason: "the code changed since the checks ran",
 			};
 		}
-		if (!checksPassed(run.checks ?? [], checks.commands.length)) {
+		if (!checksPassedSinceBaseline(t, run.checks ?? [], checks.commands)) {
 			return correctOrBlock("Checks still fail", "checks failed");
 		}
 		if (task.route === "quick") {
@@ -980,9 +1076,14 @@ export function correctionFeedback(task: TaskRecord): string {
 	const parts: string[] = [];
 	const lastChecks = [...task.runs]
 		.reverse()
-		.find((run) => run.kind === "checks");
+		.find((run) => run.kind === "checks" && !run.baseline);
+	// Checks that already failed before the task are not its to fix.
+	const already = new Set(preExistingFailures(task).map((c) => c.command));
 	for (const check of lastChecks?.checks ?? []) {
-		if (check.exitCode !== 0 || check.timedOut) {
+		if (
+			(check.exitCode !== 0 || check.timedOut) &&
+			!already.has(check.command)
+		) {
 			parts.push(
 				`Check \`${check.command}\` ${check.timedOut ? "timed out" : `failed (exit ${check.exitCode})`}:\n\`\`\`\n${check.outputTail.slice(-2500)}\n\`\`\``,
 			);
@@ -1337,6 +1438,8 @@ export interface ControllerDeps {
 		cwd: string;
 		commands: string[];
 		signal: AbortSignal;
+		/** Commands whose failure does not stop the rest. */
+		continuePast?: string[];
 	}) => Promise<CheckResult[]>;
 	/** Runs one package-manager audit command (dependency-audit.ts). */
 	runAudit?: RunAuditCommand;
@@ -2182,6 +2285,9 @@ export class TaskController {
 								dependencyNoteFor(evidenceView(task)),
 								kind === "review"
 									? advisoryNoteFor(evidenceView(task))
+									: undefined,
+								kind === "review"
+									? preExistingNoteFor(evidenceView(task))
 									: undefined,
 							]
 								.filter(Boolean)
@@ -3408,6 +3514,12 @@ ${(run.summary ?? "").trim()}
 		continueAfter: boolean,
 	): TaskRecord {
 		const checks = this.approvedChecks(project, task);
+		// Before the task changes anything: run every check (not stopping at
+		// the first failure) to see which already fail.
+		const baseline =
+			task.evidenceStart === undefined &&
+			!implementationStarted(task) &&
+			!task.runs.some((r) => r.kind === "checks" && r.baseline);
 		const run: TaskRun = {
 			id: this.deps.newId(),
 			kind: "checks",
@@ -3417,10 +3529,13 @@ ${(run.summary ?? "").trim()}
 			startedAt: this.deps.now().toISOString(),
 			// The exact commands: results count only while they stay approved.
 			commands: [...checks.commands],
+			...(baseline ? { baseline: true } : {}),
 		};
 		task.runs.push(run);
 		task.state = "running";
-		task.stateReason = "running the project's checks";
+		task.stateReason = baseline
+			? "checking which of the project's checks already fail, before changing anything"
+			: "running the project's checks";
 		saveTask(project, task);
 		this.changed(project, task.slug);
 
@@ -3440,6 +3555,9 @@ ${(run.summary ?? "").trim()}
 					cwd: task.identity.worktreePath,
 					commands: checks.commands,
 					signal: abort.signal,
+					continuePast: baseline
+						? checks.commands
+						: preExistingFailures(task).map((c) => c.command),
 				})
 				.catch((error): CheckResult[] => [
 					{

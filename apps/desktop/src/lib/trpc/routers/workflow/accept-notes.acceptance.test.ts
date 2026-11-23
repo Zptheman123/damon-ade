@@ -88,11 +88,12 @@ beforeAll(async () => {
 		resolveClaude: () => fake.command,
 		startRun: (spec, onProgress) =>
 			runner.startStageRun(spec, { spawnFn, killTree, onProgress }),
-		runChecks: ({ cwd, commands, signal }) =>
+		runChecks: ({ cwd, commands, signal, continuePast }) =>
 			checks.runChecks({
 				cwd,
 				commands,
 				signal,
+				continuePast,
 				shell: [bash as string, "-c"],
 				spawnFn,
 				killTree,
@@ -190,6 +191,48 @@ describe.if(bash !== null && git !== null)("accept as is, and notes", () => {
 		expect(task.stateReason).toContain("Accepted by you as is");
 		expect(task.canAccept).toBe(false);
 		expect(fake.calls().length).toBe(before);
+	}, 90_000);
+
+	it("a check that already failed before the task starts no fix; the review sees it", async () => {
+		const repo = makeRepo("baseline");
+		// The project's lint fails before anyone changes anything (as CRLF
+		// checkouts made Prettier fail on every file).
+		writeFileSync(join(repo, "legacy.txt"), "unformatted\n");
+		sh(repo, "add", "-A");
+		sh(repo, "commit", "-qm", "legacy");
+		workspaces.set("ws-base", { root: repo, worktree: repo });
+		const lint = "echo 'legacy.txt: Delete CR'; test ! -f legacy.txt";
+		const test = "test -f src/month.js";
+		await tasks.setChecks({ workspaceId: "ws-base", commands: [lint, test] });
+		fake.setSteps([
+			{
+				name: "implement",
+				write: {
+					"src/month.js": "export const month = 1;\n",
+					"{task}/progress.md": "Status: implemented\n",
+				},
+				cost: 0.05,
+			},
+			{ name: "review", text: "VERDICT: PASS", cost: 0.02 },
+		]);
+		const before = fake.calls().length;
+		const created = await tasks.createTask({
+			workspaceId: "ws-base",
+			description: "Add the month view",
+			route: "implement",
+			research: "none",
+		});
+		await controller.idle();
+		const task = await view("ws-base", created.slug);
+		expect(task.state).toBe("done");
+		// No fix run: just the implementation and the review.
+		const calls = fake.calls().slice(before);
+		expect(calls.map((c) => c.step)).toEqual(["implement", "review"]);
+		const review = calls.find((c) => c.step === "review");
+		expect(review?.stdin).toContain(
+			"Checks that already failed before this task",
+		);
+		expect(review?.stdin).toContain("(still fails)");
 	}, 90_000);
 
 	it("only stopped tasks with implemented work can be accepted", async () => {

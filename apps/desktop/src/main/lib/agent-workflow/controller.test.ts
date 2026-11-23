@@ -1,11 +1,16 @@
 import { describe, expect, it } from "bun:test";
 import { decideNext, taskSpend } from "./controller";
-import type { TaskFiles, TaskRecord, TaskRun } from "./tasks";
+import type { CheckResult, TaskFiles, TaskRecord, TaskRun } from "./tasks";
 import { defaultWorkflowSettings } from "./workflow-settings";
 
 /** The transition rules, from recorded facts only (no processes). */
 
-const settings = defaultWorkflowSettings();
+const defaults = defaultWorkflowSettings();
+// Routing tests: the baseline checks run (its own tests below) left out.
+const settings = {
+	...defaults,
+	execution: { ...defaults.execution, checkBaseline: false },
+};
 const noFiles: TaskFiles = {
 	hasPlan: false,
 	planQuestions: [],
@@ -628,5 +633,113 @@ describe("fewer stops, cheaper verification", () => {
 			8.57,
 			5,
 		);
+	});
+});
+
+describe("checks that already fail before the task", () => {
+	const lint = "bun run lint";
+	const both = { commands: ["bun run test", lint] };
+	const failedLint: CheckResult = {
+		command: lint,
+		exitCode: 1,
+		timedOut: false,
+		durationMs: 1,
+		outputTail: "33 files: Delete `CR`",
+	};
+	const baseline = (results = [passed(), failedLint]) =>
+		run("checks", { baseline: true, commands: both.commands, checks: results });
+
+	it("are noted once, before anything changes, and never on reconciled work", () => {
+		expect(decideNext(task("implement", []), noFiles, both, defaults)).toEqual({
+			type: "checks",
+			reason: "see which checks already fail before the change",
+		});
+		expect(
+			decideNext(task("implement", [baseline()]), noFiles, both, defaults),
+		).toMatchObject({ type: "run", kind: "implement" });
+		expect(
+			decideNext(
+				task("implement", [], { evidenceStart: 0 } as Partial<TaskRecord>),
+				noFiles,
+				both,
+				defaults,
+			),
+		).toMatchObject({ type: "run", kind: "implement" });
+		expect(
+			decideNext(task("implement", []), noFiles, noChecks, defaults),
+		).toMatchObject({ type: "run", kind: "implement" });
+	});
+
+	it("do not start a fix, while a new failure still does", () => {
+		const after = (results: CheckResult[]) =>
+			task("implement", [
+				baseline(),
+				run("implement"),
+				run("checks", { commands: both.commands, checks: results }),
+			]);
+		// Lint still fails as before: on to the review, not a fix.
+		expect(
+			decideNext(after([passed(), failedLint]), noFiles, both, defaults),
+		).toMatchObject({ type: "run", kind: "review" });
+		// The test broke because of the change: fix it.
+		expect(
+			decideNext(
+				after([{ ...passed(), exitCode: 1 }, failedLint]),
+				noFiles,
+				both,
+				defaults,
+			),
+		).toMatchObject({ type: "run", kind: "fix" });
+	});
+
+	it("a check that could not run yet, or failed without saying why, still counts after the change", () => {
+		for (const before of [
+			{
+				...failedLint,
+				exitCode: 127,
+				outputTail: "sh: eslint: command not found",
+			},
+			{ ...failedLint, outputTail: "Error: Cannot find module 'prettier'" },
+			{ ...failedLint, outputTail: 'npm error Missing script: "lint"' },
+			{ ...failedLint, outputTail: "" },
+			{ ...failedLint, exitCode: null, timedOut: true },
+		]) {
+			const t = task("implement", [
+				baseline([passed(), before]),
+				run("implement"),
+				run("checks", {
+					commands: both.commands,
+					checks: [passed(), failedLint],
+				}),
+			]);
+			expect(decideNext(t, noFiles, both, defaults)).toMatchObject({
+				type: "run",
+				kind: "fix",
+			});
+		}
+	});
+
+	it("are shown to the review, and left out of a fix's feedback", async () => {
+		const { preExistingNoteFor, correctionFeedback } = await import(
+			"./controller"
+		);
+		const t = task("implement", [
+			baseline(),
+			run("implement"),
+			run("checks", {
+				commands: both.commands,
+				checks: [
+					{ ...passed(), exitCode: 1, outputTail: "1 test failed" },
+					failedLint,
+				],
+			}),
+		]);
+		const note = preExistingNoteFor(t) ?? "";
+		expect(note).toContain("Checks that already failed before this task");
+		expect(note).toContain("`bun run lint` (still fails)");
+		expect(note).toContain("FAIL only if this task made them worse");
+		const feedback = correctionFeedback(t);
+		expect(feedback).toContain("bun run test");
+		expect(feedback).not.toContain(lint);
 	});
 });

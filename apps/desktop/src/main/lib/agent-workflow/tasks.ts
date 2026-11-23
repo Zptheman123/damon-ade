@@ -152,6 +152,11 @@ export interface TaskRun {
 	checks?: CheckResult[];
 	/** The exact approved commands a checks run ran (kind "checks"). */
 	commands?: string[];
+	/**
+	 * A checks run before the task changed anything: what already failed
+	 * then is not counted against the task (kind "checks").
+	 */
+	baseline?: boolean;
 	/** ADE's dependency audit (kind "deps"). */
 	audit?: DependencyAudit;
 	/**

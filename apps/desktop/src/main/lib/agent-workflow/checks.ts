@@ -117,13 +117,18 @@ export interface RunChecksOptions {
 	signal?: AbortSignal;
 	/** Kill a process and its children. */
 	killTree: (pid: number) => Promise<void>;
+	/**
+	 * Commands whose failure does not stop the rest (checks that already
+	 * failed before the task changed anything).
+	 */
+	continuePast?: string[];
 }
 
 function tail(text: string, max = 4000): string {
 	return text.length > max ? text.slice(-max) : text;
 }
 
-/** Run each check command in order; stops at the first failure. */
+/** Run each check command in order; stops at the first failure (except continuePast). */
 export async function runChecks(
 	options: RunChecksOptions,
 ): Promise<CheckResult[]> {
@@ -185,7 +190,8 @@ export async function runChecks(
 			child.on("close", (code) => finish(code));
 		});
 		results.push(result);
-		if (result.exitCode !== 0) break;
+		if (result.exitCode !== 0 && !options.continuePast?.includes(command))
+			break;
 	}
 	return results;
 }
