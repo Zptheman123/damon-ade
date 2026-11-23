@@ -24,6 +24,10 @@ import {
 	legacyPermissionBlocked,
 	loadCommandApprovals,
 	permissionOutcome,
+	projectCommandRules,
+	projectCommands,
+	projectCommandsEnabled,
+	projectCommandsNote,
 } from "./command-approvals";
 import {
 	auditDependencies,
@@ -308,6 +312,32 @@ export function permissionBlockReason(block: PermissionBlock): string {
 		.join(", ");
 	const more = ops.length > 3 ? ` and ${ops.length - 3} more` : "";
 	return `Waiting for your approval: the ${block.kind} run was refused permission to run ${named}${more} in ${block.cwd}, so the work is not done. Approve the command in this task, then Resume to retry the ${block.kind}. Planning and earlier work are kept; the Architect is not called for this.`;
+}
+
+/** Block reasons that mean only that corrections or review rounds ran out. */
+const QUALITY_BLOCK =
+	/after \d+ correction\(s\)\.?$|has not passed after \d+ round\(s\)\.?$|No passing review after \d+ review round\(s\)\.?$/;
+
+/**
+ * Add notes to a task's description and task.md (later runs read both).
+ * The caller saves the task.
+ */
+function appendNotes(
+	project: ProjectWorkflow,
+	task: TaskRecord,
+	text: string,
+	at: string,
+): void {
+	task.notes = [...(task.notes ?? []), { at, text }];
+	const marker = "\n\n## Notes from the user\n";
+	const index = task.description.indexOf(marker);
+	const base = index >= 0 ? task.description.slice(0, index) : task.description;
+	task.description = `${base}${marker}${task.notes.map((n) => n.text).join("\n\n")}`;
+	writeFileSync(
+		join(taskDir(project, task.slug), "task.md"),
+		`# ${task.title}\n\n${task.description}\n`,
+		"utf8",
+	);
 }
 
 const NEEDS_IMPLEMENTER = /Needs implementer/i;
@@ -1424,8 +1454,13 @@ export class TaskController {
 				const approvals = loadCommandApprovals(project);
 				const commandsOff =
 					this.deps.loadSettings().execution.permissions === "edits";
-				const approved = ops.some((op) =>
-					approvals.some((a) => approvalCovers(a, op)),
+				const own = projectCommandsEnabled(project)
+					? projectCommands(task.identity.worktreePath)
+					: [];
+				const approved = ops.some(
+					(op) =>
+						approvals.some((a) => approvalCovers(a, op)) ||
+						(!!op.command && own.includes(op.command.trim())),
 				);
 				if ((commandsOff || !approved) && !options.retryWithoutApproval) {
 					task.state = "paused";
@@ -1513,19 +1548,7 @@ export class TaskController {
 					"Wait for the current run to finish (it would not see the notes)",
 				);
 			}
-			task.notes = [
-				...(task.notes ?? []),
-				{ at: this.deps.now().toISOString(), text: notes },
-			];
-			const marker = "\n\n## Notes from the user\n";
-			const at = task.description.indexOf(marker);
-			const base = at >= 0 ? task.description.slice(0, at) : task.description;
-			task.description = `${base}${marker}${task.notes.map((n) => n.text).join("\n\n")}`;
-			writeFileSync(
-				join(taskDir(project, slug), "task.md"),
-				`# ${task.title}\n\n${task.description}\n`,
-				"utf8",
-			);
+			appendNotes(project, task, notes, this.deps.now().toISOString());
 			saveTask(project, task);
 			this.changed(project, slug);
 			return task;
@@ -1906,6 +1929,12 @@ export class TaskController {
 			settings.execution.permissions === "bypass"
 				? "bypassPermissions"
 				: "acceptEdits";
+		// Implementing runs may run commands; reviews and planning never do.
+		const runsCommands =
+			!readOnly &&
+			kind !== "plan" &&
+			kind !== "escalate" &&
+			settings.execution.permissions !== "edits";
 		const allowedTools = [
 			// The Researcher's real internet access: Claude Code's own web
 			// search and page reading.
@@ -1913,11 +1942,10 @@ export class TaskController {
 			...(mayRunChecks ? checks.commands.map((c) => `Bash(${c}:*)`) : []),
 			// Commands the user approved for this project's implementing runs
 			// (setup, installs): exact rules, never for reviews or planning.
-			...(!readOnly &&
-			kind !== "plan" &&
-			kind !== "escalate" &&
-			settings.execution.permissions !== "edits"
-				? loadCommandApprovals(project).map(approvalRule)
+			...(runsCommands ? loadCommandApprovals(project).map(approvalRule) : []),
+			// "Project commands": installing and the project's own scripts.
+			...(runsCommands && projectCommandsEnabled(project)
+				? projectCommandRules(task.identity.worktreePath)
 				: []),
 			...(readOnly || kind === "plan" || kind === "escalate"
 				? READ_ONLY_GIT
@@ -1935,6 +1963,10 @@ export class TaskController {
 				stage: kind,
 				task,
 				hasResearch: files.hasResearch,
+				commandsNote:
+					runsCommands && projectCommandsEnabled(project)
+						? projectCommandsNote(task.identity.worktreePath)
+						: undefined,
 				dependencyNote:
 					kind === "review" || readOnly
 						? dependencyNoteFor(evidenceView(task))
@@ -2594,6 +2626,15 @@ ${(run.summary ?? "").trim()}
 		const settled = (c: TaskRecord) =>
 			c.state === "done" || c.state === "cancelled";
 		const stoppedStates = ["paused", "blocked", "failed", "needs-input"];
+		// Keep going: a subtask stopped only by findings its corrections did
+		// not clear is accepted, and the findings move to a later subtask.
+		if (this.deps.loadSettings().execution.keepGoing ?? true) {
+			for (const child of children) {
+				if (stoppedStates.includes(child.state)) {
+					this.carryOverFindings(project, children, child);
+				}
+			}
+		}
 		let stopped = children.filter((c) => stoppedStates.includes(c.state));
 		const active = children.filter((c) => c.state === "running");
 
@@ -2684,6 +2725,58 @@ ${(run.summary ?? "").trim()}
 		saveTask(project, request);
 		this.changed(project, request.slug);
 		return request;
+	}
+
+	/**
+	 * A subtask that stopped only because its checks or reviewers still
+	 * failed after the corrections it was allowed: accept it as is (it did
+	 * the work), and add the open findings as notes to the subtask that will
+	 * fix them: the QA subtask if there is one that has not started, else
+	 * the next one that builds on it, else the last one not started.
+	 * Returns whether it was carried over.
+	 */
+	private carryOverFindings(
+		project: ProjectWorkflow,
+		children: TaskRecord[],
+		child: TaskRecord,
+	): boolean {
+		if (
+			child.state !== "blocked" ||
+			activeRun(child) ||
+			!QUALITY_BLOCK.test(child.stateReason ?? "") ||
+			!evidenceView(child).runs.some(isImplementation)
+		) {
+			return false;
+		}
+		const findings = correctionFeedback(evidenceView(child)).slice(0, 6000);
+		const notStarted = children.filter(
+			(c) => c.slug !== child.slug && c.state === "idle" && c.runs.length === 0,
+		);
+		const target =
+			notStarted.find((c) =>
+				/\b(qa|quality|polish|test(s|ing)?)\b/i.test(c.title),
+			) ??
+			notStarted.find((c) => c.dependsOn?.includes(child.slug)) ??
+			notStarted.at(-1);
+		const stoppedBy = child.stateReason ?? "findings remained";
+		child.accepted = { at: this.deps.now().toISOString(), stoppedBy };
+		child.state = "done";
+		child.stateReason = target
+			? `Accepted automatically to keep the request going (${stoppedBy}). The open findings were added to "${target.title}".`
+			: `Accepted automatically to keep the request going (${stoppedBy}). No later subtask was left to take the open findings; they are in this task's runs.`;
+		saveTask(project, child);
+		if (target) {
+			appendNotes(
+				project,
+				target,
+				`Left over from "${child.title}" (its reviews still failed after its corrections; it was accepted so the request could continue). Fix these as part of this task:\n${findings}`,
+				this.deps.now().toISOString(),
+			);
+			saveTask(project, target);
+			this.changed(project, target.slug);
+		}
+		this.deps.onChange?.(project, child.slug);
+		return true;
 	}
 
 	private subtaskFailedToStart(

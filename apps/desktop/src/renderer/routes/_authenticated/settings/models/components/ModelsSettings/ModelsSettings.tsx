@@ -62,6 +62,7 @@ interface ExecutionData {
 	pinModels: boolean;
 	cheaperFallback: boolean;
 	dependencyAudit?: AuditPolicy;
+	keepGoing?: boolean;
 }
 
 interface ExecutionDraft {
@@ -73,6 +74,7 @@ interface ExecutionDraft {
 	pinModels: boolean;
 	cheaperFallback: boolean;
 	dependencyAudit: AuditPolicy;
+	keepGoing: boolean;
 }
 
 type LimitKey =
@@ -123,6 +125,7 @@ function toDraft(settings: SettingsData): Draft {
 			pinModels: settings.execution.pinModels,
 			cheaperFallback: settings.execution.cheaperFallback,
 			dependencyAudit: settings.execution.dependencyAudit ?? "fix",
+			keepGoing: settings.execution.keepGoing ?? true,
 		},
 	};
 }
@@ -232,6 +235,7 @@ export function ModelsSettings({ visibleItems }: ModelsSettingsProps) {
 				pinModels: draft.execution.pinModels,
 				cheaperFallback: draft.execution.cheaperFallback,
 				dependencyAudit: draft.execution.dependencyAudit,
+				keepGoing: draft.execution.keepGoing,
 			},
 		});
 	};
@@ -476,6 +480,24 @@ export function ModelsSettings({ visibleItems }: ModelsSettingsProps) {
 								onCheckedChange={(cheaperFallback) =>
 									setExecution({ cheaperFallback })
 								}
+							/>
+						</div>
+						<div className="flex items-start justify-between gap-4">
+							<div className="space-y-1">
+								<Label htmlFor="keep-going" className="text-sm font-medium">
+									Team requests keep going
+								</Label>
+								<p className="text-xs text-muted-foreground">
+									When a subtask's checks or reviewers still fail after its
+									corrections, ADE accepts its work and adds the open findings
+									to a later subtask (QA first), instead of pausing the whole
+									request.
+								</p>
+							</div>
+							<Switch
+								id="keep-going"
+								checked={draft.execution.keepGoing}
+								onCheckedChange={(keepGoing) => setExecution({ keepGoing })}
 							/>
 						</div>
 					</section>

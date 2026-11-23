@@ -80,6 +80,12 @@ export interface ExecutionSettings {
 	 * only audits, "off" skips it.
 	 */
 	dependencyAudit: AuditPolicy;
+	/**
+	 * Team requests keep going: a subtask stopped only because its checks or
+	 * reviewers still failed after its corrections is accepted as is, and
+	 * its open findings are added to a later subtask (QA first).
+	 */
+	keepGoing: boolean;
 }
 
 export interface RoleRouting {
@@ -117,6 +123,7 @@ export function defaultExecutionSettings(): ExecutionSettings {
 		pinModels: true,
 		cheaperFallback: true,
 		dependencyAudit: "fix",
+		keepGoing: true,
 	};
 }
 
@@ -249,6 +256,12 @@ export function validateWorkflowSettings(input: unknown): ValidationResult {
 	) {
 		errors.push(`dependencyAudit must be one of ${AUDIT_POLICIES.join(", ")}`);
 	}
+	if (
+		execution?.keepGoing !== undefined &&
+		typeof execution.keepGoing !== "boolean"
+	) {
+		errors.push("keepGoing must be true or false");
+	}
 	for (const key of ["pinModels", "cheaperFallback"] as const) {
 		if (typeof execution?.[key] !== "boolean")
 			errors.push(`${key} must be true or false`);
@@ -288,6 +301,7 @@ export function validateWorkflowSettings(input: unknown): ValidationResult {
 				cheaperFallback: (execution as ExecutionSettings).cheaperFallback,
 				dependencyAudit:
 					(execution as ExecutionSettings).dependencyAudit ?? "fix",
+				keepGoing: (execution as ExecutionSettings).keepGoing ?? true,
 			},
 		},
 	};

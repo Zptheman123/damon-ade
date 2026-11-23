@@ -45,6 +45,8 @@ export interface StagePromptInput {
 	projectNote?: string;
 	/** ADE's dependency audit, for reviews: findings that do not block. */
 	dependencyNote?: string;
+	/** For implementing runs: the commands they may run without asking. */
+	commandsNote?: string;
 	/** For a custom role: what it is and what it must return. */
 	customRole?: {
 		name: string;
@@ -84,7 +86,7 @@ The task description is in ${dir}/task.md. Write progress only inside the task f
 			: ""
 	}${input.projectNote ? `\n\n${input.projectNote}` : ""}${
 		input.dependencyNote ? `\n\n${input.dependencyNote}` : ""
-	}${
+	}${input.commandsNote ? `\n\n${input.commandsNote}` : ""}${
 		task.attachments?.length
 			? `\n\n${attachmentsPromptNote(task.attachments)}`
 			: ""

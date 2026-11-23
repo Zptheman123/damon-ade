@@ -53,7 +53,10 @@ import {
 	approvalRule,
 	describeDenials,
 	loadCommandApprovals,
+	projectCommands,
+	projectCommandsEnabled,
 	removeCommandApproval,
+	setProjectCommands,
 } from "main/lib/agent-workflow/command-approvals";
 import {
 	getTaskController,
@@ -112,6 +115,7 @@ const executionSchema = z.object({
 	pinModels: z.boolean(),
 	cheaperFallback: z.boolean(),
 	dependencyAudit: z.enum(["fix", "report", "off"]).optional(),
+	keepGoing: z.boolean().optional(),
 });
 
 const settingsInputSchema = z.object({
@@ -392,6 +396,10 @@ function describeTask(
 ) {
 	const files = readTaskFiles(project, task.slug);
 	const approvals = task.permissionBlock ? loadCommandApprovals(project) : [];
+	const ownCommands =
+		task.permissionBlock && projectCommandsEnabled(project)
+			? projectCommands(task.identity.worktreePath)
+			: [];
 	const spend = taskSpend(task);
 	const mismatch = identityMismatch(
 		task,
@@ -519,7 +527,9 @@ function describeTask(
 					operations: describeDenials(task.permissionBlock.denials).map(
 						(op) => ({
 							...op,
-							approved: approvals.some((ap) => approvalCovers(ap, op)),
+							approved:
+								approvals.some((ap) => approvalCovers(ap, op)) ||
+								(!!op.command && ownCommands.includes(op.command.trim())),
 							/** Whether "with any arguments" is allowed for this command. */
 							prefixAllowed:
 								op.approvable &&
@@ -851,6 +861,10 @@ export const createWorkflowRouter = (
 					})),
 					/** "edits": agents may not run commands at all (Settings). */
 					commandsAllowed: settings.execution.permissions !== "edits",
+					/** Installing and the project's own scripts, without asking. */
+					projectCommands: projectCommandsEnabled(ctx.project),
+					/** What that allows in this workspace now. */
+					projectCommandList: projectCommands(ctx.worktreePath),
 				};
 			}),
 
@@ -899,6 +913,17 @@ export const createWorkflowRouter = (
 					? null
 					: approvalRule(input as Parameters<typeof approvalRule>[0]),
 			})),
+
+		/** Turn "project commands" on or off for the project. */
+		setProjectCommands: publicProcedure
+			.input(z.object({ workspaceId: z.string(), enabled: z.boolean() }))
+			.mutation(({ input }) =>
+				guarded(() => {
+					const ctx = deps.resolveWorkspace(input.workspaceId);
+					setProjectCommands(ctx.project, input.enabled);
+					return { enabled: input.enabled };
+				}),
+			),
 
 		removeCommandApproval: publicProcedure
 			.input(z.object({ workspaceId: z.string(), id: z.string() }))

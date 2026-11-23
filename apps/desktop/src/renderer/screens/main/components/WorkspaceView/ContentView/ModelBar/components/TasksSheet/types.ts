@@ -47,6 +47,8 @@ export interface TaskActions {
 		slug?: string;
 	}) => void;
 	onRemoveApproval?: (id: string) => void;
+	/** Let agents install and run the project's own scripts without asking. */
+	onSetProjectCommands?: (enabled: boolean) => void;
 	/** Accept a stopped task's work as it is (what builds on it can start). */
 	onAccept?: (slug: string) => void;
 	/** Add notes a task's later runs read. */

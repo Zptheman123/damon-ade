@@ -29,6 +29,7 @@ let root: string;
 let fake: import("main/lib/agent-workflow/testing/fake-claude").FakeClaude;
 let restoreNetwork: () => void;
 let controller: import("main/lib/agent-workflow/controller").TaskController;
+let settings: typeof import("main/lib/agent-workflow/workflow-settings");
 let projectModule: typeof import("main/lib/agent-workflow/project-workflow");
 let tasks: ReturnType<
 	ReturnType<typeof import("./workflow").createWorkflowRouter>["createCaller"]
@@ -67,7 +68,7 @@ beforeAll(async () => {
 	const runner = await import("main/lib/agent-workflow/stage-runner");
 	const checks = await import("main/lib/agent-workflow/checks");
 	const identity = await import("main/lib/agent-workflow/identity");
-	const settings = await import("main/lib/agent-workflow/workflow-settings");
+	settings = await import("main/lib/agent-workflow/workflow-settings");
 	const fakeModule = await import(
 		"main/lib/agent-workflow/testing/fake-claude"
 	);
@@ -261,4 +262,138 @@ describe.if(bash !== null && git !== null)("accept as is, and notes", () => {
 			"Day buttons: names start with the visible number.",
 		);
 	}, 60_000);
+
+	it("a team request keeps going: a subtask whose reviews keep failing is accepted and its findings go to QA", async () => {
+		const repo = makeRepo("keep-going");
+		workspaces.set("ws-go", { root: repo, worktree: repo });
+		await tasks.setChecks({ workspaceId: "ws-go", commands: [] });
+		const finding = "The mini calendar has 42 tab stops; add a skip link.";
+		const fail = {
+			name: "shell-review",
+			text: `VERDICT: FAIL\n${finding}`,
+			cost: 0.02,
+		};
+		const fix = {
+			name: "shell-fix",
+			write: {
+				"src/shell.js": "export const shell = 2;\n",
+				"{task}/progress.md": "Status: implemented\n",
+			},
+			cost: 0.02,
+		};
+		fake.setSteps([
+			{
+				name: "split",
+				text: '```json\n{"subtasks": [{"title": "Design system and app shell", "description": "Build the shell.", "route": "quick"}, {"title": "QA and polish pass", "description": "Exercise every flow.", "route": "quick"}], "reason": "shell first"}\n```',
+				cost: 0.02,
+			},
+			{
+				name: "shell",
+				write: {
+					"src/shell.js": "export const shell = 1;\n",
+					"{task}/progress.md": "Status: implemented\n",
+				},
+				cost: 0.02,
+			},
+			fail,
+			fix,
+			fail,
+			fix,
+			fail,
+			{
+				name: "qa",
+				write: {
+					"src/qa.js": "export const qa = 1;\n",
+					"{task}/progress.md": "Status: implemented\n",
+				},
+				cost: 0.02,
+			},
+			{ name: "qa-review", text: "VERDICT: PASS", cost: 0.01 },
+		]);
+		const before = fake.calls().length;
+		const created = await tasks.createTask({
+			workspaceId: "ws-go",
+			description: "Build a desktop calendar app",
+			split: true,
+		});
+		await controller.idle();
+		const all = (await tasks.getProjectTasks({ workspaceId: "ws-go" })).tasks;
+		const request = all.find((t) => t.slug === created.slug);
+		const shell = all.find((t) => t.title === "Design system and app shell");
+		const qa = all.find((t) => t.title === "QA and polish pass");
+		// Never paused: the whole request finished.
+		expect(request?.state).toBe("done");
+		expect(shell?.state).toBe("done");
+		expect(shell?.accepted?.stoppedBy).toContain("correction(s)");
+		expect(shell?.stateReason).toContain('added to "QA and polish pass"');
+		expect(qa?.state).toBe("done");
+		expect(qa?.notes[0]?.text).toContain(finding);
+		// QA's run was told the findings.
+		const qaCall = fake
+			.calls()
+			.slice(before)
+			.find((c) => c.step === "qa");
+		expect(qaCall?.stdin).toContain(finding);
+		expect(fake.remainingSteps()).toBe(0);
+	}, 120_000);
+
+	it("with keep-going off, the request pauses as before", async () => {
+		const off = settings.defaultWorkflowSettings();
+		off.execution.keepGoing = false;
+		settings.saveWorkflowSettings(TEST_HOME, off);
+		try {
+			const repo = makeRepo("stop");
+			workspaces.set("ws-stop", { root: repo, worktree: repo });
+			await tasks.setChecks({ workspaceId: "ws-stop", commands: [] });
+			const fail = {
+				name: "review",
+				text: "VERDICT: FAIL\nStill wrong.",
+				cost: 0.02,
+			};
+			const fix = {
+				name: "fix",
+				write: {
+					"src/a.js": "export const a = 2;\n",
+					"{task}/progress.md": "Status: implemented\n",
+				},
+				cost: 0.02,
+			};
+			fake.setSteps([
+				{
+					name: "split",
+					text: '```json\n{"subtasks": [{"title": "Part A", "description": "A.", "route": "quick"}, {"title": "QA", "description": "Check.", "route": "quick"}], "reason": "A first"}\n```',
+					cost: 0.02,
+				},
+				{
+					name: "a",
+					write: {
+						"src/a.js": "export const a = 1;\n",
+						"{task}/progress.md": "Status: implemented\n",
+					},
+					cost: 0.02,
+				},
+				fail,
+				fix,
+				fail,
+				fix,
+				fail,
+			]);
+			const created = await tasks.createTask({
+				workspaceId: "ws-stop",
+				description: "Build part A and check it",
+				split: true,
+			});
+			await controller.idle();
+			const all = (await tasks.getProjectTasks({ workspaceId: "ws-stop" }))
+				.tasks;
+			expect(all.find((t) => t.slug === created.slug)?.state).toBe("paused");
+			expect(all.find((t) => t.title === "Part A")?.state).toBe("blocked");
+			expect(all.find((t) => t.title === "QA")?.state).toBe("idle");
+		} finally {
+			settings.saveWorkflowSettings(
+				TEST_HOME,
+				settings.defaultWorkflowSettings(),
+			);
+		}
+	}, 120_000);
 });

@@ -2,7 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AuditCommandResult } from "main/lib/agent-workflow/dependency-audit";
@@ -268,9 +274,11 @@ describe.if(bash !== null && git !== null)("Auto's dependency audit", () => {
 		const repo = makeRepo("critical");
 		workspaces.set("ws-crit", { root: repo, worktree: repo });
 		await tasks.setChecks({ workspaceId: "ws-crit", commands: [] });
-		let upgraded = false;
-		answer = () =>
-			upgraded
+		// Clean once the correction run has upgraded left-pad in the lockfile.
+		answer = (_command, cwd) =>
+			readFileSync(join(cwd, "package-lock.json"), "utf8").includes(
+				'"left-pad":"2"',
+			)
 				? npmReport({})
 				: npmReport({ "left-pad": { severity: "critical" } });
 		fake.setSteps([
@@ -293,13 +301,7 @@ describe.if(bash !== null && git !== null)("Auto's dependency audit", () => {
 			route: "implement",
 			research: "none",
 		});
-		// The fake "upgrades" once the correction run has started.
-		const timer = setInterval(() => {
-			if (fake.calls().some((c, i) => i >= before && c.step === "fix"))
-				upgraded = true;
-		}, 20);
 		await controller.idle();
-		clearInterval(timer);
 		const task = await view("ws-crit", created.slug);
 		expect(task.state).toBe("done");
 		expect(task.runs.map((r) => r.kind)).toEqual([

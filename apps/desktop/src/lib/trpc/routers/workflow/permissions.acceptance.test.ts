@@ -165,6 +165,8 @@ describe.if(bash !== null && git !== null)("permission-blocked work", () => {
 		const repo = makeRepo("calendar");
 		workspaces.set("ws-cal", { root: repo, worktree: repo });
 		await tasks.setChecks({ workspaceId: "ws-cal", commands: [] });
+		// Narrow approvals only: "project commands" would allow npm install.
+		await tasks.setProjectCommands({ workspaceId: "ws-cal", enabled: false });
 		const needed = [
 			{ command: "npm view electron-vite version" },
 			{ command: "npm install" },
@@ -352,6 +354,10 @@ describe.if(bash !== null && git !== null)("permission-blocked work", () => {
 		const repo = makeRepo("narrow");
 		workspaces.set("ws-narrow", { root: repo, worktree: repo });
 		await tasks.setChecks({ workspaceId: "ws-narrow", commands: [] });
+		await tasks.setProjectCommands({
+			workspaceId: "ws-narrow",
+			enabled: false,
+		});
 		await tasks.approveCommand({
 			workspaceId: "ws-narrow",
 			tool: "Bash",
@@ -406,10 +412,10 @@ describe.if(bash !== null && git !== null)("permission-blocked work", () => {
 		workspaces.set("ws-opt", { root: repo, worktree: repo });
 		await tasks.setChecks({ workspaceId: "ws-opt", commands: [] });
 		fake.setSteps([
-			// Refused `npm outdated`, but the run wrote that the work is done.
+			// Refused `npx npm-check-updates`, but the run wrote that the work is done.
 			{
 				name: "quick",
-				commands: [{ command: "npm outdated" }],
+				commands: [{ command: "npx npm-check-updates" }],
 				write: {
 					"README.md": "# App\n\nUsage.\n",
 					"{task}/progress.md": "Status: implemented\n",
@@ -553,5 +559,90 @@ describe.if(bash !== null && git !== null)("permission-blocked work", () => {
 		expect(readFileSync(join(dir, "escalations", "002.md"), "utf8")).toContain(
 			"Handled by ADE, not by the Architect",
 		);
+	}, 60_000);
+	it("project commands: installing and the project's own scripts run without asking; other programs are still refused", async () => {
+		const repo = makeRepo("project-commands");
+		writeFileSync(
+			join(repo, "package.json"),
+			JSON.stringify({
+				name: "app",
+				scripts: {
+					build: "tsc",
+					test: "vitest run",
+					"weird name; rm -rf /": "x",
+				},
+			}),
+		);
+		sh(repo, "add", "-A");
+		sh(repo, "commit", "-qm", "scripts");
+		workspaces.set("ws-own", { root: repo, worktree: repo });
+		await tasks.setChecks({ workspaceId: "ws-own", commands: [] });
+		const approvals = await tasks.getCommandApprovals({
+			workspaceId: "ws-own",
+		});
+		expect(approvals.projectCommands).toBe(true);
+		expect(approvals.projectCommandList).toEqual([
+			"npm install",
+			"npm ci",
+			"npm test",
+			"npm run build",
+			"npm run test",
+		]);
+		const executedBefore = fake.executed().length;
+		fake.setSteps([
+			{
+				name: "quick",
+				commands: [
+					{ command: "npm install" },
+					{ command: "npm run build" },
+					{ tool: "PowerShell", command: "npm test" },
+					{ command: "npm view electron-vite version" },
+					{ command: "npm install left-pad" },
+					{ command: "npx create-vite app" },
+					{ command: "node -e process.exit(0)" },
+				],
+				write: { "{task}/progress.md": "Status: implemented\n" },
+				cost: 0.05,
+			},
+			{ name: "review", text: "VERDICT: PASS", cost: 0.01 },
+		]);
+		const before = fake.calls().length;
+		const created = await tasks.createTask({
+			workspaceId: "ws-own",
+			description: "Build it",
+			route: "quick",
+			research: "none",
+		});
+		await controller.idle();
+		const call = fake.calls()[before];
+		expect(call.stdin).toContain("## Commands you can run without asking");
+		expect(call.stdin).toContain("- `npm run build`");
+		expect(
+			fake
+				.executed()
+				.slice(executedBefore)
+				.map((e) => `${e.tool}: ${e.command}`),
+		).toEqual([
+			"Bash: npm install",
+			"Bash: npm run build",
+			"PowerShell: npm test",
+			"Bash: npm view electron-vite version",
+		]);
+		// The run said it finished: the refused extras were optional.
+		const task = await view("ws-own", created.slug);
+		expect(task.state).toBe("done");
+		expect(task.runs[0].permissionDenials?.map((d) => d.input.command)).toEqual(
+			[
+				"npm install left-pad",
+				"npx create-vite app",
+				"node -e process.exit(0)",
+			],
+		);
+		// The review runs no commands.
+		expect(
+			allowedTools(fake.calls()[before + 1].args).some((r) =>
+				r.includes("npm"),
+			),
+		).toBe(false);
 	}, 60_000);
 });

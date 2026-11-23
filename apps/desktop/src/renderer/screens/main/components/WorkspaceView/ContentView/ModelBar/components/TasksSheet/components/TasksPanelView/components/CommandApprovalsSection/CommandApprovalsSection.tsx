@@ -7,6 +7,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@superset/ui/select";
+import { Switch } from "@superset/ui/switch";
 import { useState } from "react";
 import { LuTerminal, LuX } from "react-icons/lu";
 import {
@@ -61,6 +62,31 @@ export function CommandApprovalsSection({
 				exists). Reviews and planning never get them. Each applies to this
 				project only.
 			</p>
+			<div className="flex items-start justify-between gap-3 rounded-md bg-muted/40 px-2.5 py-2">
+				<div className="min-w-0 space-y-0.5">
+					<label htmlFor="project-commands" className="text-xs font-medium">
+						Project commands
+					</label>
+					<p className="text-[11px] text-muted-foreground">
+						Install dependencies and run this project's own package.json scripts
+						without asking, as exact commands read from package.json at each
+						run. New packages are added through package.json. Never npx, node -e
+						or other programs.
+					</p>
+					{approvals?.projectCommands &&
+						approvals.projectCommandList.length > 0 && (
+							<p className="break-words font-mono text-[10px] text-muted-foreground">
+								{approvals.projectCommandList.join(" · ")}
+							</p>
+						)}
+				</div>
+				<Switch
+					id="project-commands"
+					checked={approvals?.projectCommands ?? true}
+					disabled={actions.busy || !approvals}
+					onCheckedChange={(enabled) => actions.onSetProjectCommands?.(enabled)}
+				/>
+			</div>
 			{approvals && !approvals.commandsAllowed && (
 				<p className="rounded-md border border-amber-500/40 bg-amber-500/5 px-2 py-1.5 text-[11px]">
 					Agents may not run commands at all right now (Settings → Models →

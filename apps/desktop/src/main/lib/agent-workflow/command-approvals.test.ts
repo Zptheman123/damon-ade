@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,7 +12,11 @@ import {
 	loadCommandApprovals,
 	parseDenials,
 	permissionOutcome,
+	projectCommandRules,
+	projectCommands,
+	projectCommandsEnabled,
 	removeCommandApproval,
+	setProjectCommands,
 } from "./command-approvals";
 
 const dir = mkdtempSync(join(tmpdir(), "ade-approvals-"));
@@ -264,5 +268,61 @@ describe("the CLI's permission_denials", () => {
 				"Status: blocked\nThe API returns 500.",
 			),
 		).toBe(false);
+	});
+});
+
+describe("project commands", () => {
+	const repo = (name: string, files: Record<string, string>) => {
+		const d = join(dir, name);
+		mkdirSync(d, { recursive: true });
+		for (const [f, c] of Object.entries(files)) writeFileSync(join(d, f), c);
+		return d;
+	};
+
+	it("are the install command and each script by name, for the project's package manager", () => {
+		const npm = repo("npm-app", {
+			"package.json": JSON.stringify({
+				scripts: { dev: "vite", test: "vitest", "x; rm -rf /": "y" },
+			}),
+		});
+		expect(projectCommands(npm)).toEqual([
+			"npm install",
+			"npm ci",
+			"npm test",
+			"npm run dev",
+			"npm run test",
+		]);
+		const pnpm = repo("pnpm-app", {
+			"package.json": JSON.stringify({ scripts: { build: "tsc" } }),
+			"pnpm-lock.yaml": "",
+		});
+		expect(projectCommands(pnpm)).toEqual(["pnpm install", "pnpm run build"]);
+		// Before package.json exists: installing only (scaffolding).
+		expect(projectCommands(repo("empty", {}))).toEqual([
+			"npm install",
+			"npm ci",
+		]);
+	});
+
+	it("become exact rules for both shells, plus read-only lookups; never npx or node", () => {
+		const d = repo("rules", {
+			"package.json": JSON.stringify({ scripts: { build: "tsc" } }),
+		});
+		const rules = projectCommandRules(d);
+		expect(rules).toContain("Bash(npm run build)");
+		expect(rules).toContain("PowerShell(npm run build)");
+		expect(rules).toContain("Bash(npm view:*)");
+		expect(
+			rules.some((r) => /npx|node|\*\)$/.test(r.replace(/:\*\)$/, ")"))),
+		).toBe(false);
+	});
+
+	it("are on unless turned off for the project", () => {
+		const p = { dir: mkdtempSync(join(tmpdir(), "ade-own-")) };
+		expect(projectCommandsEnabled(p)).toBe(true);
+		setProjectCommands(p, false);
+		expect(projectCommandsEnabled(p)).toBe(false);
+		setProjectCommands(p, true);
+		expect(projectCommandsEnabled(p)).toBe(true);
 	});
 });

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	approvalProblem,
@@ -64,17 +64,108 @@ export function loadCommandApprovals(
 	}
 }
 
+function readFile(project: Pick<ProjectWorkflow, "dir">): {
+	approvals?: CommandApproval[];
+	projectCommands?: boolean;
+} {
+	try {
+		return JSON.parse(readFileSync(join(project.dir, FILE), "utf8"));
+	} catch {
+		return {};
+	}
+}
+
 function save(
 	project: Pick<ProjectWorkflow, "dir">,
 	approvals: CommandApproval[],
+	projectCommands: boolean = projectCommandsEnabled(project),
 ) {
 	const path = join(project.dir, FILE);
 	writeFileSync(
 		`${path}.tmp`,
-		`${JSON.stringify({ version: 1, approvals }, null, 2)}\n`,
+		`${JSON.stringify({ version: 1, projectCommands, approvals }, null, 2)}\n`,
 		"utf8",
 	);
 	renameSync(`${path}.tmp`, path);
+}
+
+/**
+ * "Project commands": agents may install dependencies and run the
+ * project's own package.json scripts without asking. On unless the user
+ * turned it off for the project.
+ */
+export function projectCommandsEnabled(
+	project: Pick<ProjectWorkflow, "dir">,
+): boolean {
+	return readFile(project).projectCommands !== false;
+}
+
+export function setProjectCommands(
+	project: Pick<ProjectWorkflow, "dir">,
+	enabled: boolean,
+): void {
+	save(project, loadCommandApprovals(project), enabled);
+}
+
+/** Script names that are safe to put in a rule as they are. */
+const SCRIPT_NAME = /^[\w:.@/-]{1,80}$/;
+
+/**
+ * The project's own commands, as exact rules: installing dependencies,
+ * each package.json script by name, and read-only registry lookups. Read
+ * from the folder at the time of the run, so a script added since is
+ * included and a removed one is not. Never npx, node -e, or arbitrary
+ * package installs (add a dependency to package.json, then install).
+ */
+export function projectCommands(cwd: string): string[] {
+	let scripts: string[] = [];
+	try {
+		const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as {
+			scripts?: Record<string, unknown>;
+		};
+		scripts = Object.keys(pkg.scripts ?? {}).filter((name) =>
+			SCRIPT_NAME.test(name),
+		);
+	} catch {
+		// No package.json yet: installing is still allowed (scaffolding).
+	}
+	const has = (file: string) => existsSync(join(cwd, file));
+	const manager = has("pnpm-lock.yaml")
+		? "pnpm"
+		: has("yarn.lock")
+			? "yarn"
+			: has("bun.lock") || has("bun.lockb")
+				? "bun"
+				: "npm";
+	const install =
+		manager === "npm"
+			? ["npm install", "npm ci"]
+			: manager === "yarn"
+				? ["yarn install", "yarn"]
+				: [`${manager} install`];
+	const run = scripts.map((name) => `${manager} run ${name}`);
+	const test =
+		scripts.includes("test") && manager !== "bun" ? [`${manager} test`] : [];
+	return [...install, ...test, ...run];
+}
+
+/** CLI rules for the project's commands, for Bash and PowerShell alike. */
+export function projectCommandRules(cwd: string): string[] {
+	const commands = projectCommands(cwd);
+	const lookups = ["npm view:*", "npm ls:*", "npm outdated:*"];
+	return [
+		...commands.flatMap((c) => [`Bash(${c})`, `PowerShell(${c})`]),
+		...lookups.map((c) => `Bash(${c})`),
+	];
+}
+
+/** What an implementing run is told it may run without asking. */
+export function projectCommandsNote(cwd: string): string {
+	const commands = projectCommands(cwd);
+	return `## Commands you can run without asking
+${commands.map((c) => `- \`${c}\``).join("\n")}
+- \`npm view …\`, \`npm ls …\` and \`npm outdated …\` (read-only lookups)
+To add a dependency, add it to package.json and run the install command above; do not install packages by name. A script you add to package.json can be run as \`… run <name>\` from the next run on. Run each command on its own (no \`&&\`, \`;\` or pipes) from the repository root. Anything else needs the user's approval: avoid it where you can.`;
 }
 
 export function addCommandApproval(

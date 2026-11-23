@@ -135,6 +135,11 @@ export function TasksSheet({
 		},
 		onError,
 	});
+	const setProjectCommands =
+		electronTrpc.workflow.setProjectCommands.useMutation({
+			onSuccess: refresh,
+			onError,
+		});
 	const removeApproval =
 		electronTrpc.workflow.removeCommandApproval.useMutation({
 			onSuccess: refresh,
@@ -217,6 +222,7 @@ export function TasksSheet({
 		setSpecialist,
 		approveCommand,
 		removeApproval,
+		setProjectCommands,
 		acceptTask,
 		addNotes,
 	];
@@ -239,6 +245,8 @@ export function TasksSheet({
 			onApproveCommand: (input) =>
 				approveCommand.mutate({ workspaceId, ...input }),
 			onRemoveApproval: (id) => removeApproval.mutate({ workspaceId, id }),
+			onSetProjectCommands: (enabled) =>
+				setProjectCommands.mutate({ workspaceId, enabled }),
 			onAccept: (slug) => acceptTask.mutate({ workspaceId, slug }),
 			onAddNotes: (slug, notes) =>
 				addNotes.mutate({ workspaceId, slug, notes }),
@@ -286,6 +294,7 @@ export function TasksSheet({
 			openUrl,
 			approveCommand,
 			removeApproval,
+			setProjectCommands,
 			acceptTask,
 			addNotes,
 			start,
