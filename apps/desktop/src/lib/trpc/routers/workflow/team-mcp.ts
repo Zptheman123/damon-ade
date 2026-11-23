@@ -1,4 +1,11 @@
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { getClaudeSettingsContent } from "main/lib/agent-setup/agent-wrappers-claude-codex";
 import { getNotifyScriptPath } from "main/lib/agent-setup/notify-hook";
@@ -14,6 +21,7 @@ import {
 } from "main/lib/agent-workflow";
 import { parseSplit } from "main/lib/agent-workflow/split";
 import { getLocalToken } from "main/lib/notifications/local-auth";
+import { transcriptPathFor } from "main/lib/usage-metrics/transcript";
 import { defaultWorkflowRouterDeps, type WorkflowRouterDeps } from "./workflow";
 
 /**
@@ -182,15 +190,54 @@ export function writeTeamMcpConfig(
 	return path;
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The Team chat's own Claude Code conversation, kept per team workspace so
+ * it continues where it left off: resumed while its transcript exists,
+ * otherwise started with a new id that is recorded here.
+ */
+export function teamChatSession(
+	homeDir: string,
+	workspaceId: string,
+	cwd: string,
+): { resume?: string; sessionId?: string } {
+	const path = join(homeDir, "team-chat", `${workspaceId}.session.json`);
+	try {
+		const saved = JSON.parse(readFileSync(path, "utf8")) as {
+			sessionId?: string;
+		};
+		if (saved.sessionId && UUID.test(saved.sessionId)) {
+			// A conversation with messages is resumed; one never used yet
+			// (no transcript) starts again under the same id.
+			return existsSync(transcriptPathFor(cwd, saved.sessionId))
+				? { resume: saved.sessionId }
+				: { sessionId: saved.sessionId };
+		}
+	} catch {
+		// No conversation yet.
+	}
+	const sessionId = randomUUID();
+	mkdirSync(join(homeDir, "team-chat"), { recursive: true });
+	writeFileSync(path, `${JSON.stringify({ sessionId }, null, 2)}\n`, "utf8");
+	return { sessionId };
+}
+
 /** The command that starts the Coordinator session in a terminal. */
-export function teamChatCommand(configPath: string): string {
+export function teamChatCommand(
+	configPath: string,
+	session: { resume?: string; sessionId?: string } = {},
+): string {
 	const config = configPath.replace(/\\/g, "/");
 	// Kept short: it is what the user sees typed into the terminal. The
 	// permissions are in the settings file, the role in the server's
 	// instructions.
 	return [
 		"claude",
-		`-n "${TEAM_CHAT_TAB}"`,
+		// The same conversation as last time, or a new one with a known id.
+		session.resume
+			? `--resume ${session.resume}`
+			: `-n "${TEAM_CHAT_TAB}"${session.sessionId ? ` --session-id ${session.sessionId}` : ""}`,
 		// The Coordinator plans: Opus, like the planner.
 		"--model opus --effort high",
 		`--mcp-config "${config}"`,

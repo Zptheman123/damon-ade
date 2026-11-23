@@ -270,6 +270,27 @@ app.get("/hook/complete", (req, res) => {
 	const hookAuthorized = checkLocalRequest(req, getSupersetHomeDir(), [
 		"hook",
 	]).ok;
+	// The pane's Claude Code conversation, so it resumes after a restart
+	// (only from ADE's own hook, which carries the terminal's token).
+	if (
+		hookAuthorized &&
+		resolvedPaneId &&
+		typeof sessionId === "string" &&
+		sessionId
+	) {
+		const paneForSession = resolvedPaneId;
+		const claudeSession = decodeHookString(sessionId);
+		void import("main/lib/terminal")
+			.then(({ getDaemonTerminalManager }) =>
+				getDaemonTerminalManager().recordClaudeSessionId(
+					paneForSession,
+					claudeSession,
+				),
+			)
+			.catch((error) =>
+				console.warn("[notifications] Could not record the session:", error),
+			);
+	}
 	if (
 		mappedEventType === "Stop" &&
 		hookAuthorized &&

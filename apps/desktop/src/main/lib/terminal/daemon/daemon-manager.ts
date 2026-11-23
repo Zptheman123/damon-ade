@@ -582,7 +582,8 @@ export class DaemonTerminalManager extends EventEmitter {
 	private extractClaudeSessionId(scrollback: string): string | undefined {
 		// Strip ANSI escape sequences for cleaner matching
 		const plain = scrollback.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
-		const UUID_RE = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+		const UUID_RE =
+			"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
 		// Pattern 1: `claude --resume <uuid>` — explicit resume command
 		const resumeMatch = plain.match(
@@ -637,6 +638,25 @@ export class DaemonTerminalManager extends EventEmitter {
 		}
 
 		this.client.writeNoAck({ sessionId: paneId, data });
+	}
+
+	/**
+	 * Record the Claude Code conversation running in a pane (reported by
+	 * ADE's own hook), so the pane resumes it after a restart. Scanning the
+	 * output for it rarely works on Windows.
+	 */
+	recordClaudeSessionId(paneId: string, sessionId: string): boolean {
+		if (
+			!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+				sessionId,
+			)
+		) {
+			return false;
+		}
+		const writer = this.historyManager.getHistoryWriter(paneId);
+		if (!writer) return false;
+		writer.updateClaudeSessionId(sessionId);
+		return true;
 	}
 
 	ackColdRestore(paneId: string): void {

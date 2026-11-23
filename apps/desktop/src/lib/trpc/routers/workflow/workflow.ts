@@ -1347,8 +1347,12 @@ export const createWorkflowRouter = (
 				if (!workspace || workspace.type !== "branch" || !worktreePath) {
 					return { enabled: false as const };
 				}
-				const { teamChatCommand, writeTeamMcpConfig, TEAM_CHAT_TAB } =
-					await import("./team-mcp");
+				const {
+					teamChatCommand,
+					teamChatSession,
+					writeTeamMcpConfig,
+					TEAM_CHAT_TAB,
+				} = await import("./team-mcp");
 				const config = writeTeamMcpConfig(
 					deps.homeDir(),
 					input.workspaceId,
@@ -1358,7 +1362,11 @@ export const createWorkflowRouter = (
 					enabled: true as const,
 					tabName: TEAM_CHAT_TAB,
 					cwd: worktreePath,
-					command: teamChatCommand(config),
+					// The last Team chat conversation continues (when it still exists).
+					command: teamChatCommand(
+						config,
+						teamChatSession(deps.homeDir(), input.workspaceId, worktreePath),
+					),
 				};
 			}),
 
