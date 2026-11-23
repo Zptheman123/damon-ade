@@ -272,6 +272,14 @@ export interface TaskRecord {
 	 */
 	permissionBlock?: PermissionBlock;
 	/**
+	 * The user accepted the work as it is, although a step had stopped it
+	 * (for example a reviewer still failing after its corrections). The task
+	 * counts as done, so the subtasks that build on it can start.
+	 */
+	accepted?: { at: string; stoppedBy: string };
+	/** Notes the user added after creating the task (also in task.md). */
+	notes?: Array<{ at: string; text: string }>;
+	/**
 	 * Research: "first" runs the Researcher before the work; "only" runs it
 	 * and finishes without changing code. Unset: no research.
 	 */

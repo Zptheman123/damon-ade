@@ -121,6 +121,20 @@ export function TasksSheet({
 		},
 		onError,
 	});
+	const acceptTask = electronTrpc.workflow.accept.useMutation({
+		onSuccess: (result) => {
+			toast.success("Accepted as is; what builds on it can start");
+			reportState(result);
+		},
+		onError,
+	});
+	const addNotes = electronTrpc.workflow.addNotes.useMutation({
+		onSuccess: () => {
+			toast.success("Notes added; the next run reads them");
+			refresh();
+		},
+		onError,
+	});
 	const removeApproval =
 		electronTrpc.workflow.removeCommandApproval.useMutation({
 			onSuccess: refresh,
@@ -203,6 +217,8 @@ export function TasksSheet({
 		setSpecialist,
 		approveCommand,
 		removeApproval,
+		acceptTask,
+		addNotes,
 	];
 	const busy = mutations.some((mutation) => mutation.isPending);
 
@@ -223,6 +239,9 @@ export function TasksSheet({
 			onApproveCommand: (input) =>
 				approveCommand.mutate({ workspaceId, ...input }),
 			onRemoveApproval: (id) => removeApproval.mutate({ workspaceId, id }),
+			onAccept: (slug) => acceptTask.mutate({ workspaceId, slug }),
+			onAddNotes: (slug, notes) =>
+				addNotes.mutate({ workspaceId, slug, notes }),
 			onPause: (slug) => pause.mutate({ workspaceId, slug }),
 			onCancel: (slug) => cancel.mutate({ workspaceId, slug }),
 			onSetMode: (slug, mode) => setMode.mutate({ workspaceId, slug, mode }),
@@ -267,6 +286,8 @@ export function TasksSheet({
 			openUrl,
 			approveCommand,
 			removeApproval,
+			acceptTask,
+			addNotes,
 			start,
 			resume,
 			pause,

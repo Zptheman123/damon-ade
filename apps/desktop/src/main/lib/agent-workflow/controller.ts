@@ -1456,6 +1456,82 @@ export class TaskController {
 		});
 	}
 
+	/**
+	 * Accept a stopped task's work as it is: it counts as done, so the
+	 * subtasks that build on it can start. Only implemented work can be
+	 * accepted; what stopped it is kept on the task.
+	 */
+	accept(project: ProjectWorkflow, slug: string): Promise<TaskRecord> {
+		return withTaskLock(project, slug, () => {
+			const task = this.load(project, slug);
+			if (activeRun(task)) throw new Error("This task is running");
+			if (task.isRequest) {
+				throw new Error(
+					"Accept the subtask that stopped, not the whole request",
+				);
+			}
+			if (
+				!["blocked", "paused", "needs-input", "failed"].includes(task.state)
+			) {
+				throw new Error("Only a task that has stopped can be accepted as is");
+			}
+			if (!evidenceView(task).runs.some(isImplementation)) {
+				throw new Error(
+					"Nothing has been implemented yet, so there is nothing to accept",
+				);
+			}
+			const stoppedBy = task.stateReason ?? task.state;
+			task.accepted = { at: this.deps.now().toISOString(), stoppedBy };
+			task.permissionBlock = undefined;
+			task.pauseRequested = false;
+			task.state = "done";
+			task.stateReason = `Accepted by you as is. It had stopped: ${stoppedBy}`;
+			saveTask(project, task);
+			this.changed(project, slug);
+			return task;
+		});
+	}
+
+	/**
+	 * Add the user's notes to a task that has not finished: they go into its
+	 * description and task.md, so every later run reads them.
+	 */
+	addNotes(
+		project: ProjectWorkflow,
+		slug: string,
+		text: string,
+	): Promise<TaskRecord> {
+		return withTaskLock(project, slug, () => {
+			const task = this.load(project, slug);
+			const notes = text.trim();
+			if (!notes) throw new Error("Write the notes first");
+			if (task.state === "done" || task.state === "cancelled") {
+				throw new Error(`This task is ${task.state}`);
+			}
+			if (activeRun(task)) {
+				throw new Error(
+					"Wait for the current run to finish (it would not see the notes)",
+				);
+			}
+			task.notes = [
+				...(task.notes ?? []),
+				{ at: this.deps.now().toISOString(), text: notes },
+			];
+			const marker = "\n\n## Notes from the user\n";
+			const at = task.description.indexOf(marker);
+			const base = at >= 0 ? task.description.slice(0, at) : task.description;
+			task.description = `${base}${marker}${task.notes.map((n) => n.text).join("\n\n")}`;
+			writeFileSync(
+				join(taskDir(project, slug), "task.md"),
+				`# ${task.title}\n\n${task.description}\n`,
+				"utf8",
+			);
+			saveTask(project, task);
+			this.changed(project, slug);
+			return task;
+		});
+	}
+
 	/** Auto: finish the current run, then stop. */
 	pause(project: ProjectWorkflow, slug: string): Promise<TaskRecord> {
 		return withTaskLock(project, slug, () => {
@@ -2476,7 +2552,9 @@ ${(run.summary ?? "").trim()}
 				const committed = commitFiles(
 					dependency.identity.worktreePath,
 					files,
-					`${dependency.title}\n\nADE team request subtask, verified by its review.`,
+					dependency.accepted
+						? `${dependency.title}\n\nADE team request subtask, accepted by the user as is.`
+						: `${dependency.title}\n\nADE team request subtask, verified by its review.`,
 				);
 				if ("error" in committed) {
 					return `Could not commit "${dependency.title}" in ${dependency.agentName ? `${dependency.agentName}'s folder` : dependency.identity.worktreePath} for "${subtask.title}" to build on: ${committed.error}`;

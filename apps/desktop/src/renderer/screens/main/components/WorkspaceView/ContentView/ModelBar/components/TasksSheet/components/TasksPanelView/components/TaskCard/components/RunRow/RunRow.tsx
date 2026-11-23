@@ -180,7 +180,15 @@ export function RunRow({ run, onOpenSession, onOpenUrl }: RunRowProps) {
 						</div>
 					)}
 					{run.error && (
-						<p className="break-words text-destructive">
+						<p
+							className={cn(
+								"break-words",
+								// A refused command waits for the user; it is not a crash.
+								run.failure === "permission"
+									? "text-amber-700 dark:text-amber-400"
+									: "text-destructive",
+							)}
+						>
 							{run.failure ? `${run.failure}: ` : ""}
 							{run.error.slice(0, 300)}
 						</p>

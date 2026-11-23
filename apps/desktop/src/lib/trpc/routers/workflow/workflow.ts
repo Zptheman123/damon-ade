@@ -17,6 +17,7 @@ import {
 	defaultWorkflowSettings,
 	EFFORT_LEVELS,
 	ensureProjectWorkflow,
+	evidenceView,
 	getTask,
 	identityMismatch,
 	listSpecialists,
@@ -494,6 +495,20 @@ function describeTask(
 		triage: task.triage ?? null,
 		/** Research: "first" (before the work) or "only" (no code changes). */
 		research: task.research ?? null,
+		/** Set when the user accepted the work although a step had stopped it. */
+		accepted: task.accepted ?? null,
+		/** Notes the user added after creating the task. */
+		notes: task.notes ?? [],
+		/** Whether "Accept as is" applies: stopped, with implemented work. */
+		canAccept:
+			!task.isRequest &&
+			!activeRun(task) &&
+			["blocked", "paused", "needs-input", "failed"].includes(task.state) &&
+			evidenceView(task).runs.some(
+				(run) =>
+					run.status === "succeeded" &&
+					["quick", "implement", "build", "fix"].includes(run.kind),
+			),
 		/** Commands the last implementing run was refused, waiting for approval. */
 		permissionBlock: task.permissionBlock
 			? {
@@ -1130,6 +1145,32 @@ export const createWorkflowRouter = (
 			),
 
 		/** Pause and Cancel always work, from any worktree of the project. */
+		/** Accept a stopped task's work as it is, so what builds on it can start. */
+		accept: publicProcedure.input(taskInput).mutation(({ input }) =>
+			guarded(async () => {
+				const { ctx } = taskFor(input.workspaceId, input.slug, {
+					allowOtherWorktree: true,
+				});
+				const task = await deps.controller().accept(ctx.project, input.slug);
+				return { state: task.state, stateReason: task.stateReason ?? null };
+			}),
+		),
+
+		/** Notes for a task that has not finished; later runs read them. */
+		addNotes: publicProcedure
+			.input(taskInput.extend({ notes: z.string().min(1).max(10_000) }))
+			.mutation(({ input }) =>
+				guarded(async () => {
+					const { ctx } = taskFor(input.workspaceId, input.slug, {
+						allowOtherWorktree: true,
+					});
+					const task = await deps
+						.controller()
+						.addNotes(ctx.project, input.slug, input.notes);
+					return { notes: task.notes ?? [] };
+				}),
+			),
+
 		pause: publicProcedure.input(taskInput).mutation(({ input }) =>
 			guarded(async () => {
 				const { ctx } = taskFor(input.workspaceId, input.slug, {

@@ -47,6 +47,10 @@ export interface TaskActions {
 		slug?: string;
 	}) => void;
 	onRemoveApproval?: (id: string) => void;
+	/** Accept a stopped task's work as it is (what builds on it can start). */
+	onAccept?: (slug: string) => void;
+	/** Add notes a task's later runs read. */
+	onAddNotes?: (slug: string, notes: string) => void;
 	onPause: (slug: string) => void;
 	onCancel: (slug: string) => void;
 	onSetMode: (slug: string, mode: Mode) => void;

@@ -13,6 +13,7 @@ import { Textarea } from "@superset/ui/textarea";
 import { cn } from "@superset/ui/utils";
 import { useState } from "react";
 import {
+	LuCheck,
 	LuGitBranch,
 	LuPause,
 	LuPlay,
@@ -33,6 +34,7 @@ import { Detail } from "./components/Detail";
 import { PermissionBlockPanel } from "./components/PermissionBlockPanel";
 import { RunRow } from "./components/RunRow";
 import { TaskHistory } from "./components/TaskHistory";
+import { TaskNotes } from "./components/TaskNotes";
 
 interface TaskCardProps {
 	task: TaskView;
@@ -226,6 +228,10 @@ export function TaskCard({
 					disabled={running || elsewhere || finished}
 				/>
 
+				{!finished && !task.isRequest && (
+					<TaskNotes task={task} actions={actions} disabled={busy || running} />
+				)}
+
 				{elsewhere && !task.parentSlug && (
 					<div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-2.5">
 						<p className="text-xs">{task.mismatch}</p>
@@ -285,6 +291,18 @@ export function TaskCard({
 							>
 								<LuRotateCw className="size-3.5" aria-hidden />
 								Resume
+							</Button>
+						)}
+						{task.canAccept && (
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={busy}
+								title="Count this work as done as it is, so the subtasks that build on it can start. What stopped it stays on the task."
+								onClick={() => actions.onAccept?.(task.slug)}
+							>
+								<LuCheck className="size-3.5" aria-hidden />
+								Accept as is
 							</Button>
 						)}
 						{!finished && (
