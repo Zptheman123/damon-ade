@@ -15,7 +15,7 @@ import {
 	type ReactNode,
 	useState,
 } from "react";
-import { LuListTodo, LuPlay, LuUsers } from "react-icons/lu";
+import { LuListTodo, LuPlay, LuRotateCw, LuUsers } from "react-icons/lu";
 import { AUTOMATIC, BY_AI, ROUTE_LABELS } from "../../constants";
 import type {
 	ApprovalsView,
@@ -84,6 +84,11 @@ export function TasksPanelView({
 	);
 	const split = teamRequest && mode === "auto";
 	const tasks = data?.tasks ?? [];
+	const waitingCount = tasks.filter(
+		(t) =>
+			!t.parentSlug &&
+			["paused", "blocked", "needs-input", "failed"].includes(t.state),
+	).length;
 	const bySlug = new Map(tasks.map((t) => [t.slug, t]));
 	const historyAvailable = data?.historyAvailable ?? 0;
 	const usage = data?.usage;
@@ -305,7 +310,23 @@ export function TasksPanelView({
 
 			<section className="space-y-3">
 				<div className="flex items-center justify-between">
-					<p className="text-sm font-semibold">Tasks</p>
+					<div className="flex items-center gap-2">
+						<p className="text-sm font-semibold">Tasks</p>
+						{waitingCount > 0 && actions.onResumeAll && (
+							<Button
+								size="sm"
+								variant="outline"
+								className="h-6 gap-1 px-2 text-[11px]"
+								disabled={actions.busy}
+								onClick={actions.onResumeAll}
+								title="Resume every task and team request that is waiting; what needs your decision stays and says why"
+								data-resume-all
+							>
+								<LuRotateCw className="size-3" aria-hidden />
+								Resume all ({waitingCount})
+							</Button>
+						)}
+					</div>
 					{tasks.length > 0 && (
 						<span className="text-xs text-muted-foreground">
 							{tasks.filter((t) => !t.parentSlug).length} total

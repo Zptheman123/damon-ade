@@ -1164,6 +1164,84 @@ export const createWorkflowRouter = (
 			}),
 		),
 
+		/** Top-level tasks and team requests that are waiting for the user. */
+		attention: publicProcedure
+			.input(z.object({ workspaceId: z.string() }))
+			.query(({ input }) => {
+				const ctx = deps.resolveWorkspace(input.workspaceId);
+				return listTaskRecords(ctx.project)
+					.filter(
+						(task) =>
+							!task.parentSlug &&
+							!task.waitingForFolder &&
+							["paused", "blocked", "needs-input", "failed"].includes(
+								task.state,
+							),
+					)
+					.map((task) => ({
+						slug: task.slug,
+						title: task.title,
+						state: task.state,
+						reason: task.stateReason ?? null,
+					}));
+			}),
+
+		/**
+		 * Resume everything that is waiting, at once. What still needs a
+		 * decision (an answer, a command approval) stays, with its reason.
+		 */
+		resumeAll: publicProcedure
+			.input(z.object({ workspaceId: z.string() }))
+			.mutation(({ input }) =>
+				guarded(async () => {
+					const ctx = deps.resolveWorkspace(input.workspaceId);
+					const waiting = listTaskRecords(ctx.project).filter(
+						(task) =>
+							!task.parentSlug &&
+							["paused", "blocked", "needs-input", "failed"].includes(
+								task.state,
+							),
+					);
+					let resumed = 0;
+					const still: Array<{ title: string; reason: string }> = [];
+					for (const task of waiting) {
+						const files = readTaskFiles(ctx.project, task.slug);
+						if (task.state === "needs-input" && files.planQuestions.length) {
+							still.push({
+								title: task.title,
+								reason: "The plan has questions for you.",
+							});
+							continue;
+						}
+						try {
+							const after = await deps
+								.controller()
+								.resume(ctx.project, task.slug);
+							// Queued behind another task in its folder: it will run.
+							if (
+								!after.waitingForFolder &&
+								["paused", "blocked", "needs-input", "failed"].includes(
+									after.state,
+								)
+							) {
+								still.push({
+									title: task.title,
+									reason: after.stateReason ?? after.state,
+								});
+							} else {
+								resumed++;
+							}
+						} catch (error) {
+							still.push({
+								title: task.title,
+								reason: error instanceof Error ? error.message : String(error),
+							});
+						}
+					}
+					return { resumed, still };
+				}),
+			),
+
 		resume: publicProcedure
 			.input(
 				taskInput.extend({

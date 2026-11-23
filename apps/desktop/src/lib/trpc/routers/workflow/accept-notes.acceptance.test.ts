@@ -396,4 +396,84 @@ describe.if(bash !== null && git !== null)("accept as is, and notes", () => {
 			);
 		}
 	}, 120_000);
+
+	it("Resume all continues what can continue and says what still needs a decision", async () => {
+		const repo = makeRepo("resume-all");
+		workspaces.set("ws-all", { root: repo, worktree: repo });
+		await tasks.setChecks({ workspaceId: "ws-all", commands: [] });
+		// Two tasks the user paused, one waiting for a plan answer.
+		const make = (description: string) =>
+			tasks.createTask({
+				workspaceId: "ws-all",
+				description,
+				route: "quick",
+				mode: "manual",
+				research: "none",
+			});
+		const a = await make("Fix the header colour");
+		const b = await make("Fix the footer colour");
+		for (const slug of [a.slug, b.slug]) {
+			await tasks.setMode({ workspaceId: "ws-all", slug, mode: "auto" });
+			await tasks.pause({ workspaceId: "ws-all", slug });
+		}
+		const asking = await make("Rework navigation");
+		const { project } = await tasks.getProjectTasks({ workspaceId: "ws-all" });
+		const planDir = join(
+			TEST_HOME,
+			"workflow",
+			"projects",
+			project.key,
+			"tasks",
+			asking.slug,
+		);
+		writeFileSync(
+			join(planDir, "plan.md"),
+			"# Plan\n## Questions for the user\n- Tabs or a sidebar?\n",
+		);
+		await tasks.setMode({
+			workspaceId: "ws-all",
+			slug: asking.slug,
+			mode: "auto",
+		});
+		await tasks.pause({ workspaceId: "ws-all", slug: asking.slug });
+		const record = (await import("main/lib/agent-workflow/tasks")).getTask(
+			(
+				await import("main/lib/agent-workflow/project-workflow")
+			).ensureProjectWorkflow(TEST_HOME, repo),
+			asking.slug,
+		);
+		if (record) {
+			record.state = "needs-input";
+			(await import("main/lib/agent-workflow/tasks")).saveTask(
+				(
+					await import("main/lib/agent-workflow/project-workflow")
+				).ensureProjectWorkflow(TEST_HOME, repo),
+				record,
+			);
+		}
+		expect((await tasks.attention({ workspaceId: "ws-all" })).length).toBe(3);
+
+		const step = (name: string) => ({
+			name,
+			write: {
+				"README.md": `# ${name}\n`,
+				"{task}/progress.md": "Status: implemented\n",
+			},
+			cost: 0.01,
+		});
+		fake.setSteps([
+			step("header"),
+			{ name: "review-1", text: "VERDICT: PASS", cost: 0.01 },
+			step("footer"),
+			{ name: "review-2", text: "VERDICT: PASS", cost: 0.01 },
+		]);
+		const result = await tasks.resumeAll({ workspaceId: "ws-all" });
+		await controller.idle();
+		expect(result.resumed).toBe(2);
+		expect(result.still.map((s) => [s.title, s.reason])).toEqual([
+			["Rework navigation", "The plan has questions for you."],
+		]);
+		const left = await tasks.attention({ workspaceId: "ws-all" });
+		expect(left.map((t) => t.title)).toEqual(["Rework navigation"]);
+	}, 120_000);
 });

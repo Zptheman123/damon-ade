@@ -70,6 +70,7 @@ import {
 	type CheckResult,
 	createTask,
 	getTask,
+	listTaskRecords,
 	type ModelStage,
 	type PermissionBlock,
 	type RunKind,
@@ -1471,6 +1472,9 @@ export class TaskController {
 	private changed(project: ProjectWorkflow, slug: string): void {
 		this.deps.onChange?.(project, slug);
 		const task = getTask(project, slug);
+		if (task && task.state !== "running" && !activeRun(task)) {
+			this.startQueued(project, task.identity.worktreePath, slug);
+		}
 		if (task?.parentSlug && task.state !== "running" && task.state !== "idle") {
 			this.kickRequest(project, task.parentSlug);
 		}
@@ -1542,6 +1546,36 @@ export class TaskController {
 	}
 
 	private resumeTimers = new Set<ReturnType<typeof setTimeout>>();
+
+	/**
+	 * A task stopped or finished in this folder: start the next task queued
+	 * behind it (the one that waited longest).
+	 */
+	private startQueued(project: ProjectWorkflow, folder: string, from: string) {
+		const here = folderKey(folder);
+		if (
+			[...this.live.values()].some((live) => folderKey(live.worktree) === here)
+		) {
+			return;
+		}
+		const next = listTaskRecords(project)
+			.filter(
+				(t) =>
+					t.slug !== from &&
+					t.waitingForFolder &&
+					t.state === "paused" &&
+					folderKey(t.identity.worktreePath) === here,
+			)
+			.sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+		if (!next) return;
+		this.track(
+			project,
+			next.slug,
+			this.resume(project, next.slug).catch((error) =>
+				console.warn("[workflow] Starting a queued task failed:", error),
+			),
+		);
+	}
 
 	/**
 	 * Resume a paused task later, without the user (a rate limit's wait,
@@ -1634,6 +1668,7 @@ export class TaskController {
 			const last = task.runs[task.runs.length - 1];
 			if (last && last.status !== "succeeded") task.acknowledgedRunId = last.id;
 			task.pauseRequested = false;
+			task.waitingForFolder = undefined;
 			task.state = "idle";
 			task.stateReason = undefined;
 			if (task.isRequest && task.subtaskSlugs?.length) {
@@ -1968,8 +2003,14 @@ export class TaskController {
 		}
 		const busy = this.folderBusy(project, task);
 		if (busy) {
+			// Queued, not stopped: it starts when the folder is free.
+			const other = [...this.live.values()].find(
+				(live) =>
+					folderKey(live.worktree) === folderKey(task.identity.worktreePath),
+			);
 			task.state = "paused";
-			task.stateReason = busy;
+			task.waitingForFolder = true;
+			task.stateReason = `Queued: starts by itself when "${other?.title ?? "the task running here"}" finishes in this folder.`;
 			saveTask(project, task);
 			this.changed(project, task.slug);
 			return task;

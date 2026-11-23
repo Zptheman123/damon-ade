@@ -121,6 +121,21 @@ export function TasksSheet({
 		},
 		onError,
 	});
+	const resumeAll = electronTrpc.workflow.resumeAll.useMutation({
+		onSuccess: (result) => {
+			if (!result) return;
+			const still = result.still.length
+				? ` ${result.still.length} still need you: ${result.still
+						.slice(0, 3)
+						.map((s) => `${s.title} (${s.reason.slice(0, 80)})`)
+						.join("; ")}`
+				: "";
+			if (result.still.length) toast(`Resumed ${result.resumed}.${still}`);
+			else toast.success(`Resumed ${result.resumed}`);
+			refresh();
+		},
+		onError,
+	});
 	const acceptTask = electronTrpc.workflow.accept.useMutation({
 		onSuccess: (result) => {
 			toast.success("Accepted as is; what builds on it can start");
@@ -225,6 +240,7 @@ export function TasksSheet({
 		setProjectCommands,
 		acceptTask,
 		addNotes,
+		resumeAll,
 	];
 	const busy = mutations.some((mutation) => mutation.isPending);
 
@@ -248,6 +264,7 @@ export function TasksSheet({
 			onSetProjectCommands: (enabled) =>
 				setProjectCommands.mutate({ workspaceId, enabled }),
 			onAccept: (slug) => acceptTask.mutate({ workspaceId, slug }),
+			onResumeAll: () => resumeAll.mutate({ workspaceId }),
 			onAddNotes: (slug, notes) =>
 				addNotes.mutate({ workspaceId, slug, notes }),
 			onPause: (slug) => pause.mutate({ workspaceId, slug }),
@@ -297,6 +314,7 @@ export function TasksSheet({
 			setProjectCommands,
 			acceptTask,
 			addNotes,
+			resumeAll,
 			start,
 			resume,
 			pause,

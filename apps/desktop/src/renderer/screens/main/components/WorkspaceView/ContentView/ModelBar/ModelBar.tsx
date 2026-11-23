@@ -29,6 +29,7 @@ import { RunSheet } from "./components/RunSheet";
 import { SpecialistsSheet } from "./components/SpecialistsSheet";
 import { TasksSheet } from "./components/TasksSheet";
 import { TeamChatSheet } from "./components/TeamChatSheet";
+import { useAttention } from "./hooks/useAttention";
 import { useRunTargets } from "./hooks/useRunTargets";
 import { useTeamChatTab } from "./hooks/useTeamChatTab";
 import { MODEL_BAR_MODELS, type ModelDescriptor } from "./models";
@@ -58,6 +59,7 @@ export function ModelBar() {
 	const [specialistsOpen, setSpecialistsOpen] = useState(false);
 	const [runOpen, setRunOpen] = useState(false);
 	const runs = useRunTargets(workspaceId);
+	const attention = useAttention(workspaceId);
 
 	// Close the install dialog once a re-check confirms the tool is now present.
 	useEffect(() => {
@@ -225,11 +227,24 @@ export function ModelBar() {
 						>
 							<LuListTodo className="size-3.5" aria-hidden />
 							Tasks
+							{attention.length > 0 && (
+								<span
+									className="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold leading-4 text-white"
+									data-attention={attention.length}
+								>
+									{attention.length}
+									<span className="sr-only"> waiting for you</span>
+								</span>
+							)}
 						</button>
 					</TooltipTrigger>
 					<TooltipContent side="bottom" showArrow={false}>
-						Auto: describe a task; ADE runs it through checks and review to a
-						verified finish
+						{attention.length > 0
+							? `Waiting for you: ${attention
+									.slice(0, 3)
+									.map((a) => a.title)
+									.join("; ")}${attention.length > 3 ? "…" : ""}`
+							: "Auto: describe a task; ADE runs it through checks and review to a verified finish"}
 					</TooltipContent>
 				</Tooltip>
 				<Tooltip>

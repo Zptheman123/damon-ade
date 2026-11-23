@@ -277,6 +277,8 @@ export interface TaskRecord {
 	 * counts as done, so the subtasks that build on it can start.
 	 */
 	accepted?: { at: string; stoppedBy: string };
+	/** Paused only because another task is running in its folder (queued). */
+	waitingForFolder?: boolean;
 	/** Notes the user added after creating the task (also in task.md). */
 	notes?: Array<{ at: string; text: string }>;
 	/**

@@ -11,7 +11,8 @@ import { TaskController } from "./controller";
 import { runAuditCommand } from "./dependency-audit";
 import { listWorkflowProjects, type ProjectWorkflow } from "./project-workflow";
 import { startStageRun } from "./stage-runner";
-import { listTaskRecords } from "./tasks";
+import { createTaskNotifier } from "./task-notices";
+import { getTask, listTaskRecords } from "./tasks";
 import { loadWorkflowSettings } from "./workflow-settings";
 
 /**
@@ -43,9 +44,45 @@ export function checkShell(): string[] {
 
 let controller: TaskController | undefined;
 
+/** Desktop notifications when a task or team request stops or finishes. */
+const notifier = createTaskNotifier((notice) => {
+	console.log(`[workflow] ${notice.title}: ${notice.body}`);
+	// Loaded here, not at the top: this module is also imported by tests.
+	void import("electron")
+		.then(({ BrowserWindow, Notification }) => {
+			if (!Notification?.isSupported()) return;
+			const shown = new Notification({
+				title: notice.title,
+				body: notice.body,
+			});
+			shown.on("click", () => {
+				const window = BrowserWindow.getAllWindows()[0];
+				window?.show();
+				window?.focus();
+			});
+			shown.show();
+		})
+		.catch((error) =>
+			console.warn("[workflow] Could not show a notification:", error),
+		);
+});
+
+/** Start-up: every task's current state, so only later changes notify. */
+function seedNotices(): void {
+	for (const project of listWorkflowProjects(getSupersetHomeDir())) {
+		for (const task of listTaskRecords(project))
+			notifier.seed(project.key, task);
+	}
+}
+
 export function getTaskController(): TaskController {
 	if (controller) return controller;
 	const homeDir = getSupersetHomeDir();
+	try {
+		seedNotices();
+	} catch (error) {
+		console.warn("[workflow] Could not read task states:", error);
+	}
 	controller = new TaskController({
 		homeDir,
 		loadSettings: () => loadWorkflowSettings(homeDir),
@@ -81,6 +118,9 @@ export function getTaskController(): TaskController {
 				projectKey: project.key,
 				slug,
 			} satisfies TaskChangeEvent);
+			// Tell the user when work stops or finishes (task-notices.ts).
+			const task = getTask(project, slug);
+			if (task) notifier.changed(project.key, task);
 		},
 	});
 	return controller;

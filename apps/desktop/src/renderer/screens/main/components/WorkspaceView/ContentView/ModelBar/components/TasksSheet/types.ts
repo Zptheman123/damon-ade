@@ -51,6 +51,8 @@ export interface TaskActions {
 	onSetProjectCommands?: (enabled: boolean) => void;
 	/** Accept a stopped task's work as it is (what builds on it can start). */
 	onAccept?: (slug: string) => void;
+	/** Resume every task and team request that is waiting. */
+	onResumeAll?: () => void;
 	/** Add notes a task's later runs read. */
 	onAddNotes?: (slug: string, notes: string) => void;
 	onPause: (slug: string) => void;
