@@ -161,6 +161,9 @@ export interface TaskRun {
 	codeState?: string;
 	/** The run's final text, trimmed. */
 	summary?: string;
+	/** While it runs: the agent's latest message, and how many responses so far. */
+	lastText?: string;
+	responses?: number;
 	/** Tool calls the CLI refused during the run (its permission_denials). */
 	permissionDenials?: PermissionDenial[];
 	/** Set on runs recorded by a version that reads permission_denials. */

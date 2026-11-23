@@ -475,5 +475,15 @@ describe.if(bash !== null && git !== null)("accept as is, and notes", () => {
 		]);
 		const left = await tasks.attention({ workspaceId: "ws-all" });
 		expect(left.map((t) => t.title)).toEqual(["Rework navigation"]);
+
+		// The workspace's activity: nothing running, one waiting, two done.
+		const activity = await tasks.agentActivity({ workspaceId: "ws-all" });
+		expect(activity.current).toBeNull();
+		expect(activity.waiting.map((w) => w.title)).toEqual(["Rework navigation"]);
+		expect(activity.recent.map((r) => [r.title, r.state]).sort()).toEqual([
+			["Fix the footer colour", "done"],
+			["Fix the header colour", "done"],
+		]);
+		expect(activity.recent.every((r) => r.costUsd > 0)).toBe(true);
 	}, 120_000);
 });

@@ -1,6 +1,7 @@
 import { useSidebarStore } from "renderer/stores/sidebar-state";
 import { SidebarControl } from "../../SidebarControl";
 import { ContentHeader } from "./ContentHeader";
+import { AgentActivityBar } from "./components/AgentActivityBar";
 import { ModelBar } from "./ModelBar";
 import { TabsContent } from "./TabsContent";
 import { GroupStrip } from "./TabsContent/GroupStrip";
@@ -16,6 +17,7 @@ export function ContentView() {
 				<GroupStrip />
 			</ContentHeader>
 			<ModelBar />
+			<AgentActivityBar />
 			<TabsContent />
 		</div>
 	);

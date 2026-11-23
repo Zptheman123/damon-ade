@@ -2326,6 +2326,10 @@ export class TaskController {
 						live.liveCostUsd = progress.liveCostUsd;
 						live.costState = progress.costState;
 						live.observedModels = progress.observedModels;
+						// What the agent is saying now (shown on its workspace).
+						if (progress.lastText)
+							live.lastText = progress.lastText.slice(-400);
+						live.responses = progress.responses;
 						saveTask(project, current);
 						this.changed(project, task.slug);
 					});

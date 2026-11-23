@@ -22,6 +22,7 @@ import { BinaryInstallDialog } from "renderer/components/BinaryInstallDialog/Bin
 import { electronTrpc } from "renderer/lib/electron-trpc";
 import { useRuntimeAvailability } from "renderer/stores/model-bar/useRuntimeAvailability";
 import { useAgentSession } from "renderer/stores/tabs/useAgentSession";
+import { useTasksSheet } from "renderer/stores/tasks-sheet";
 import { GitHubSync } from "./components/GitHubSync";
 import { HistorySheet } from "./components/HistorySheet";
 import { OpenLocalhostButton } from "./components/OpenLocalhostButton";
@@ -51,7 +52,8 @@ export function ModelBar() {
 	);
 
 	const [installBinary, setInstallBinary] = useState<AgentBinary | null>(null);
-	const [tasksOpen, setTasksOpen] = useState(false);
+	const tasksOpen = useTasksSheet((s) => s.open);
+	const setTasksOpen = useTasksSheet((s) => s.setOpen);
 	const [chatOpen, setChatOpen] = useState(false);
 	// The team's Coordinator: a Claude Code tab that starts by itself.
 	const teamChat = useTeamChatTab(workspaceId);

@@ -1164,6 +1164,76 @@ export const createWorkflowRouter = (
 			}),
 		),
 
+		/**
+		 * What this workspace's agent is doing: the task running here now
+		 * (step, model, elapsed, cost, its latest message), what waits for the
+		 * user, and what it did recently. Its own tasks only.
+		 */
+		agentActivity: publicProcedure
+			.input(z.object({ workspaceId: z.string() }))
+			.query(({ input }) => {
+				const ctx = deps.resolveWorkspace(input.workspaceId);
+				const mine = listTaskRecords(ctx.project).filter(
+					(task) =>
+						!task.isRequest && task.identity.workspaceId === input.workspaceId,
+				);
+				const lastAt = (task: TaskRecord) =>
+					task.runs.reduce(
+						(at, run) =>
+							(run.endedAt ?? run.startedAt ?? "") > at
+								? (run.endedAt ?? run.startedAt ?? "")
+								: at,
+						task.createdAt,
+					);
+				const runningTask = mine.find((task) => activeRun(task));
+				const run = runningTask ? activeRun(runningTask) : undefined;
+				return {
+					current:
+						runningTask && run
+							? {
+									slug: runningTask.slug,
+									title: runningTask.title,
+									kind: run.kind,
+									role: run.role ?? null,
+									model: run.model ?? null,
+									startedAt: run.startedAt ?? run.queuedAt,
+									costUsd: run.liveCostUsd ?? 0,
+									lastText: run.lastText ?? null,
+									responses: run.responses ?? 0,
+									step: runningTask.runs.length,
+								}
+							: null,
+					waiting: mine
+						.filter(
+							(task) =>
+								!task.waitingForFolder &&
+								["paused", "blocked", "needs-input", "failed"].includes(
+									task.state,
+								),
+						)
+						.map((task) => ({
+							slug: task.slug,
+							title: task.title,
+							state: task.state,
+							reason: task.stateReason ?? null,
+						})),
+					queued: mine.filter((task) => task.waitingForFolder).length,
+					recent: [...mine]
+						.filter((task) => task.runs.length > 0 && task !== runningTask)
+						.sort((a, b) => lastAt(b).localeCompare(lastAt(a)))
+						.slice(0, 8)
+						.map((task) => ({
+							slug: task.slug,
+							title: task.title,
+							state: task.state,
+							reason: task.stateReason ?? null,
+							at: lastAt(task),
+							costUsd: taskSpend(task).usd,
+							runs: task.runs.length,
+						})),
+				};
+			}),
+
 		/** Top-level tasks and team requests that are waiting for the user. */
 		attention: publicProcedure
 			.input(z.object({ workspaceId: z.string() }))
