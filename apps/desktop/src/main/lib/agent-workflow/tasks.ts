@@ -280,6 +280,19 @@ export interface TaskRecord {
 	/** Notes the user added after creating the task (also in task.md). */
 	notes?: Array<{ at: string; text: string }>;
 	/**
+	 * Work brought in from subtasks this one builds on (history): which
+	 * commit, the result, files moved aside (with their backup), and files
+	 * a handoff left out (build output, private files).
+	 */
+	handoffs?: Array<{
+		at: string;
+		from: string;
+		commit: string;
+		result: "merged" | "already-in" | "checkpointed";
+		movedAside?: Array<{ path: string; why: string; backup: string }>;
+		leftOut?: Array<{ path: string; why: string }>;
+	}>;
+	/**
 	 * Research: "first" runs the Researcher before the work; "only" runs it
 	 * and finishes without changing code. Unset: no research.
 	 */

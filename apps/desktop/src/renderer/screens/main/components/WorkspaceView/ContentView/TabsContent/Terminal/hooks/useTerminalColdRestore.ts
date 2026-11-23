@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { electronTrpcClient as trpcClient } from "renderer/lib/trpc-client";
 import { consumeSyncedPane } from "renderer/stores/tabs/syncedPaneRegistry";
 import { claudeResumeCommand } from "shared/utils/agent-invoke-command";
+import { resetInputModes } from "../inputModes";
 import { coldRestoreState } from "../state";
 import type {
 	CreateOrAttachMutate,
@@ -116,6 +117,8 @@ export function useTerminalColdRestore({
 						currentXterm.clear();
 						if (scrollback) {
 							currentXterm.write(scrollback, () => {
+								// Replayed output must not leave mouse tracking etc. on.
+								resetInputModes(currentXterm);
 								requestAnimationFrame(() => {
 									if (xtermRef.current !== currentXterm) return;
 									scrollToBottom(currentXterm);
@@ -203,6 +206,9 @@ export function useTerminalColdRestore({
 			});
 		});
 
+		// The new shell starts with no input modes left over from the replay
+		// (a mouse-tracking switch would make it print mouse reports as text).
+		resetInputModes(xterm);
 		// Add visual separator
 		xterm.write("\r\n\x1b[90m─── Session Contents Restored ───\x1b[0m\r\n\r\n");
 

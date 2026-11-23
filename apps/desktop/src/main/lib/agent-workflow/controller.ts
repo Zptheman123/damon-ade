@@ -83,7 +83,7 @@ import {
 	taskDir,
 	withTaskLock,
 } from "./tasks";
-import { commitFiles, mergeCommit } from "./team-git";
+import { commitFiles, handoffFiles, integrateCommit } from "./team-git";
 import { applyTriage, parseTriage, TRIAGE_ROUTING } from "./triage";
 import type { RoleName, WorkflowSettings } from "./workflow-settings";
 
@@ -2564,10 +2564,13 @@ ${(run.summary ?? "").trim()}
 
 	/**
 	 * Before a subtask starts, bring in the work of the subtasks it depends
-	 * on that ran in another agent's folder: commit that subtask's own files
-	 * on its agent's branch (once), then merge the commit into this agent's
-	 * branch. Work in the same folder is already there. Returns why it could
-	 * not, if it could not.
+	 * on. Each finished dependency's own files are committed once on its
+	 * branch (build output and private files left out), including work done
+	 * in this same folder, so the folder is checkpointed before anything is
+	 * merged into it. Work from another agent's folder is then integrated
+	 * without losing anything (team-git integrateCommit). Repeating a
+	 * handoff that already happened changes nothing. Returns why it could
+	 * not, naming the exact files, if it could not.
 	 */
 	private bringInDependencies(
 		project: ProjectWorkflow,
@@ -2575,11 +2578,22 @@ ${(run.summary ?? "").trim()}
 		dependencies: TaskRecord[],
 	): string | undefined {
 		const here = folderKey(subtask.identity.worktreePath);
-		for (const dependency of dependencies) {
+		const destination = subtask.agentName
+			? `${subtask.agentName}'s branch`
+			: subtask.identity.worktreePath;
+		// Same folder first: checkpoint finished work before merging into it.
+		const ordered = [...dependencies].sort(
+			(a, b) =>
+				Number(folderKey(b.identity.worktreePath) === here) -
+				Number(folderKey(a.identity.worktreePath) === here),
+		);
+		for (const dependency of ordered) {
 			if (dependency.state !== "done") continue;
-			if (folderKey(dependency.identity.worktreePath) === here) continue;
+			const sameFolder = folderKey(dependency.identity.worktreePath) === here;
+			let leftOut: Array<{ path: string; why: string }> = [];
 			if (!dependency.resultCommit) {
-				const files = changedFilesOf(dependency);
+				const { files, skipped } = handoffFiles(changedFilesOf(dependency));
+				leftOut = skipped;
 				if (files.length === 0) continue;
 				const committed = commitFiles(
 					dependency.identity.worktreePath,
@@ -2593,15 +2607,44 @@ ${(run.summary ?? "").trim()}
 				}
 				dependency.resultCommit = committed.commit;
 				saveTask(project, dependency);
+				if (sameFolder) {
+					subtask.handoffs = [
+						...(subtask.handoffs ?? []),
+						{
+							at: this.deps.now().toISOString(),
+							from: dependency.title,
+							commit: committed.commit,
+							result: "checkpointed",
+							leftOut: leftOut.length ? leftOut : undefined,
+						},
+					];
+				}
 			}
-			const problem = mergeCommit(
+			if (sameFolder) continue;
+			const stamp = this.deps.now().toISOString().replace(/[:.]/g, "-");
+			const result = integrateCommit(
 				subtask.identity.worktreePath,
 				dependency.resultCommit,
 				`Bring in "${dependency.title}" (ADE team request)`,
+				join(project.dir, "handoff-backups", `${stamp}-${subtask.slug}`),
 			);
-			if (problem) {
-				return `Could not bring "${dependency.title}" into ${subtask.agentName ? `${subtask.agentName}'s branch` : subtask.identity.worktreePath}: ${problem}. Merge it yourself, then resume.`;
+			if (result.status === "merged" || result.status === "already-in") {
+				subtask.handoffs = [
+					...(subtask.handoffs ?? []),
+					{
+						at: this.deps.now().toISOString(),
+						from: dependency.title,
+						commit: dependency.resultCommit,
+						result: result.status,
+						movedAside: result.movedAside.length
+							? result.movedAside
+							: undefined,
+						leftOut: leftOut.length ? leftOut : undefined,
+					},
+				];
+				continue;
 			}
+			return `Could not bring "${dependency.title}" into ${destination}: ${result.explanation}`;
 		}
 		return undefined;
 	}

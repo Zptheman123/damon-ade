@@ -21,6 +21,7 @@ import {
 	setupResizeHandlers,
 	type TerminalRendererRef,
 } from "../helpers";
+import { resetInputModes } from "../inputModes";
 import { isPaneDestroyed } from "../pane-guards";
 import { coldRestoreState, pendingDetaches } from "../state";
 import type {
@@ -457,6 +458,8 @@ export function useTerminalLifecycle({
 											storedColdRestore.scrollback,
 											scheduleScrollToBottom,
 										);
+										// Replayed output must not leave mouse tracking etc. on.
+										resetInputModes(xterm);
 									}
 									didFirstRenderRef.current = true;
 									return;
@@ -475,6 +478,7 @@ export function useTerminalLifecycle({
 									setRestoredCwd(result.previousCwd || null);
 									if (scrollback && xterm) {
 										xterm.write(scrollback, scheduleScrollToBottom);
+										resetInputModes(xterm);
 									}
 									didFirstRenderRef.current = true;
 									return;
