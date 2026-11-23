@@ -15,96 +15,45 @@ export interface TeamPreset {
 }
 
 export const TEAM_PRESETS: TeamPreset[] = [
+	// Small on purpose: each agent owns whole features end to end. A team of
+	// specialists per layer spent most of its money on hand-offs and reviews
+	// (measured on a real app); add agents only for truly parallel work.
 	{
 		id: "web-app",
 		name: "Web app",
 		description:
-			"Every web template: interface, product, server, data, quality, security, release and docs.",
-		templates: [
-			"ui",
-			"ux",
-			"frontend",
-			"backend",
-			"api",
-			"database",
-			"qa",
-			"security",
-			"devops",
-			"performance",
-			"documentation",
-			"research",
-		],
+			"A frontend and a backend builder, each owning whole features, plus research.",
+		templates: ["frontend", "backend", "research"],
 	},
 	{
 		id: "game-dev",
 		name: "Game development",
-		description:
-			"Gameplay systems with interface, player experience, performance and testing.",
-		templates: [
-			"gamedev",
-			"ui",
-			"ux",
-			"performance",
-			"qa",
-			"documentation",
-			"research",
-		],
+		description: "One game builder for whole features, plus research.",
+		templates: ["gamedev", "research"],
 	},
 	{
 		id: "mobile-app",
 		name: "Mobile app",
-		description:
-			"The app on the device, its interface, the API behind it, and security.",
-		templates: [
-			"mobile",
-			"ui",
-			"ux",
-			"api",
-			"backend",
-			"security",
-			"qa",
-			"performance",
-			"research",
-		],
+		description: "The app builder and the backend behind it, plus research.",
+		templates: ["mobile", "backend", "research"],
 	},
 	{
 		id: "desktop-app",
 		name: "Desktop app",
-		description:
-			"Native shell and IPC, interface, testing, security and releases.",
-		templates: [
-			"desktop",
-			"ui",
-			"ux",
-			"frontend",
-			"qa",
-			"security",
-			"performance",
-			"devops",
-			"research",
-		],
+		description: "One desktop app builder for whole features, plus research.",
+		templates: ["desktop", "research"],
 	},
 	{
 		id: "backend-service",
 		name: "Backend / API service",
-		description: "Server, API contracts, data, security, operations and docs.",
-		templates: [
-			"backend",
-			"api",
-			"database",
-			"security",
-			"devops",
-			"performance",
-			"qa",
-			"documentation",
-			"research",
-		],
+		description: "One backend builder for whole features, plus research.",
+		templates: ["backend", "research"],
 	},
 	{
 		id: "minimal",
-		name: "Small team",
-		description: "Four agents: frontend, backend, testing and research.",
-		templates: ["frontend", "backend", "qa", "research"],
+		name: "Solo builder",
+		description: "One builder for everything, plus research.",
+		templates: ["frontend", "research"],
 	},
 ];
 

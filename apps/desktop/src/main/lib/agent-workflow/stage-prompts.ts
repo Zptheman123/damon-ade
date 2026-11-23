@@ -17,6 +17,19 @@ import type { ModelStage, TaskRecord } from "./tasks";
  * exact failures and the task's own changed files.
  */
 
+/**
+ * How work is split, wherever a plan is made (the Coordinator's split, the
+ * team chat). Measured on a real app: splitting by specialty (design system,
+ * views, QA, polish...) across many agents cost most of the money in
+ * hand-offs and reviews and gave a generic result. Whole features, owned
+ * end to end, with the quality bar in the description, do better.
+ */
+export const PLANNING_PRINCIPLES = `- Split by feature, not by layer or specialty: one subtask owns a whole user-visible feature end to end (its interface, logic, data and tests). Never make separate subtasks for a design system, styling, polish, accessibility, QA or testing passes: fold them into the feature they serve; each subtask's checks and review cover quality.
+- Prefer 1 to 3 subtasks and as few agents as possible. Split only parts that are truly independent (they do not change the same files and can run at the same time); otherwise keep one subtask.
+- For a new app or product: the first subtask builds a working, polished core experience end to end; later subtasks add whole features to it.
+- Write each description as the result the user will see, including the quality bar: what good looks like (layout and visual polish, empty and error states, keyboard and responsive behaviour), not just what to change.
+- Models: opus implements new products and design-heavy or multi-file features; sonnet implements contained changes; haiku only for trivial low-risk edits; fable only for exceptional architecture.`;
+
 export const VERDICT_PATTERN = /^\s*`?VERDICT:\s*(PASS|FAIL)`?\s*$/gim;
 
 export interface StagePromptInput {
@@ -233,7 +246,9 @@ ${conversation}
 - Answer the user's latest message in a few short sentences, in plain words, as in a chat.
 - Look at the code only as much as you need to plan well (search first; read only what you need).
 - If something important is unclear (what they want, where it belongs, a choice only they can make), ask at most two short questions instead of planning yet.
-- Otherwise propose a plan, or revise your last plan from what they said. A plan has 1 to 6 self-contained subtasks; one is fine for small work. Each has a short title, a description another engineer could do alone (what to change, interfaces it uses or provides, how to know it is done), the best specialist by name (or "none"), a route ("quick", "implement", "plan", "exceptional"), models per role (haiku only for trivial low-risk work, sonnet for normal work, opus for planning or reviewing difficult or risky work, fable only for exceptional architecture; risky work such as authentication, permissions, secrets, payments, data migrations or messaging people is never "quick"), and "dependsOn": the numbers (from 1) of earlier subtasks whose work it needs, or []. Independent subtasks run at the same time on their agents.
+- Otherwise propose a plan, or revise your last plan from what they said, following these principles:
+${PLANNING_PRINCIPLES}
+- A plan has 1 to 6 self-contained subtasks (usually 1 to 3); one is fine for small work. Each has a short title, a description another engineer could do alone (what to change, interfaces it uses or provides, how to know it is done), the best specialist by name (or "none"), a route ("quick", "implement", "plan", "exceptional"), models per role (haiku only for trivial low-risk work, sonnet for normal work, opus for planning or reviewing difficult or risky work, fable only for exceptional architecture; risky work such as authentication, permissions, secrets, payments, data migrations or messaging people is never "quick"), and "dependsOn": the numbers (from 1) of earlier subtasks whose work it needs, or []. Independent subtasks run at the same time on their agents.
 - When you propose or change a plan, say in a sentence or two what it does, then end with one JSON block exactly like this (the user sees it as a plan with a Go button):
 \`\`\`json
 {"subtasks": [{"title": "Email API", "description": "...", "specialist": "Backend", "route": "plan", "models": {"planner": "opus", "implementer": "sonnet", "reviewer": "sonnet"}, "dependsOn": []}], "reason": "one sentence"}
@@ -251,8 +266,9 @@ ${task.description}
 ${specialists.length ? specialists.map((s) => `- "${s.name}" (${s.specialty})${s.agent ? `, done by the agent "${s.agent}"` : ""}`).join("\n") : "- none (every subtask uses the default workflow; split only if it helps)"}
 
 ## How to split
+${PLANNING_PRINCIPLES}
 - Look briefly at the code the request touches (search first; read only what you need).
-- Make between 1 and 6 subtasks. One subtask is fine when the request is small or belongs to one specialty; do not split for its own sake.
+- Make between 1 and 6 subtasks (usually 1 to 3). One subtask is fine when the request is small or belongs to one specialty; do not split for its own sake.
 - Order them so each one's dependencies come first (for example the API before the screen that calls it).
 - Give each subtask "dependsOn": the numbers (counting from 1) of the earlier subtasks whose work it needs, or [] if it needs none. Each specialist's agent works in its own copy of the repository; independent subtasks run at the same time, and a subtask starts with the work of the ones it depends on merged in.
 - Give each a short title and a description another engineer could do alone: what to change, the interfaces it must use or provide, and how to know it is done.

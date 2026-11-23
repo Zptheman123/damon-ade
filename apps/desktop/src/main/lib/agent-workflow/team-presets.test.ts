@@ -11,7 +11,15 @@ describe("team presets", () => {
 			expect(preset.templates.every((id) => ids.has(id))).toBe(true);
 			expect(new Set(preset.templates).size).toBe(preset.templates.length);
 		}
-		expect(findTeamPreset("web-app")?.templates).toHaveLength(12);
+		expect(findTeamPreset("web-app")?.templates).toEqual([
+			"frontend",
+			"backend",
+			"research",
+		]);
+		// Small teams: agents own whole features (never a dozen specialists).
+		for (const preset of TEAM_PRESETS) {
+			expect(preset.templates.length).toBeLessThanOrEqual(3);
+		}
 		// Every preset brings a Research Agent.
 		for (const preset of TEAM_PRESETS) {
 			expect(preset.templates).toContain("research");
@@ -21,7 +29,7 @@ describe("team presets", () => {
 
 	it("a new team gets an agent and a specialist per template", () => {
 		const steps = planPreset(
-			findTeamPreset("minimal") as NonNullable<
+			findTeamPreset("web-app") as NonNullable<
 				ReturnType<typeof findTeamPreset>
 			>,
 			templates,
@@ -33,14 +41,13 @@ describe("team presets", () => {
 		).toEqual([
 			["Frontend Agent", undefined, "create"],
 			["Backend Agent", undefined, "create"],
-			["QA and testing Agent", undefined, "create"],
 			["Research Agent", undefined, "create"],
 		]);
 	});
 
 	it("applying again, or over a team's own setup, adds only what is missing", () => {
 		const steps = planPreset(
-			findTeamPreset("minimal") as NonNullable<
+			findTeamPreset("web-app") as NonNullable<
 				ReturnType<typeof findTeamPreset>
 			>,
 			templates,
@@ -63,7 +70,6 @@ describe("team presets", () => {
 		).toEqual([
 			["Frontend Agent", "fe", "keep", "s1"],
 			["Backend Agent", "be", "assign", "s2"],
-			["QA and testing Agent", undefined, "create", undefined],
 			["Research Agent", undefined, "create", undefined],
 		]);
 	});
