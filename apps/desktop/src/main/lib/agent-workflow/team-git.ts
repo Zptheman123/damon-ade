@@ -61,6 +61,17 @@ const PRIVATE = [
 	/(^|\/)\.claude\/settings\.local\.json$/,
 ];
 
+/** The commit the folder has checked out, if it is a git repository. */
+export function headCommit(worktree: string): string | undefined {
+	const head = git(worktree, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+	return head.ok && head.out ? head.out : undefined;
+}
+
+/** Whether the folder's repository has this commit (worktrees share one). */
+export function hasCommit(worktree: string, commit: string): boolean {
+	return git(worktree, ["cat-file", "-e", `${commit}^{commit}`]).ok;
+}
+
 export function isGenerated(path: string): boolean {
 	const p = path.replace(/\\/g, "/");
 	return GENERATED.some((re) => re.test(p));

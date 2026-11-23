@@ -84,7 +84,13 @@ import {
 	taskDir,
 	withTaskLock,
 } from "./tasks";
-import { commitFiles, handoffFiles, integrateCommit } from "./team-git";
+import {
+	commitFiles,
+	handoffFiles,
+	hasCommit,
+	headCommit,
+	integrateCommit,
+} from "./team-git";
 import { applyTriage, parseTriage, TRIAGE_ROUTING } from "./triage";
 import type { RoleName, WorkflowSettings } from "./workflow-settings";
 
@@ -2867,6 +2873,53 @@ ${(run.summary ?? "").trim()}
 	}
 
 	/**
+	 * Before a subtask starts in an agent's folder, that folder catches up
+	 * with the commit the request's checkout is on, so the agent builds on
+	 * the current app rather than whatever its branch last had (measured:
+	 * two of the Test App's three architect escalations were agents finding
+	 * "no code" on a branch still at the first commit). Same guards as a
+	 * handoff (integrateCommit); skipped when the folder is busy, is the
+	 * checkout itself, or is not a worktree of the same repository.
+	 */
+	private catchUp(
+		project: ProjectWorkflow,
+		request: TaskRecord,
+		subtask: TaskRecord,
+	): string | undefined {
+		const home = request.identity.worktreePath;
+		const there = subtask.identity.worktreePath;
+		if (folderKey(home) === folderKey(there)) return undefined;
+		if (this.folderBusy(project, subtask)) return undefined;
+		const head = headCommit(home);
+		if (!head || !hasCommit(there, head)) return undefined;
+		const branch = currentBranch(home);
+		const name = branch && branch !== "HEAD" ? branch : head.slice(0, 7);
+		const stamp = this.deps.now().toISOString().replace(/[:.]/g, "-");
+		const result = integrateCommit(
+			there,
+			head,
+			`Catch up with ${name} before "${subtask.title}" (ADE team request)`,
+			join(project.dir, "handoff-backups", `${stamp}-${subtask.slug}`),
+		);
+		if (result.status === "already-in") return undefined;
+		if (result.status === "merged") {
+			subtask.handoffs = [
+				...(subtask.handoffs ?? []),
+				{
+					at: this.deps.now().toISOString(),
+					from: `your checkout (${name})`,
+					commit: head,
+					result: "merged",
+					movedAside: result.movedAside.length ? result.movedAside : undefined,
+				},
+			];
+			return undefined;
+		}
+		const where = subtask.agentName ? `${subtask.agentName}'s folder` : there;
+		return `Could not bring ${where} up to date with ${name} before starting: ${result.explanation}`;
+	}
+
+	/**
 	 * Commit a finished subtask's own files once on its branch (build output
 	 * and private files left out) and remember the commit. No commit when it
 	 * changed nothing that is handed on.
@@ -3036,7 +3089,9 @@ ${(run.summary ?? "").trim()}
 			if (!dependencies.every(settled)) continue;
 			const folder = folderKey(child.identity.worktreePath);
 			if (busy.has(folder)) continue;
-			const problem = this.bringInDependencies(project, child, dependencies);
+			const problem =
+				this.catchUp(project, request, child) ??
+				this.bringInDependencies(project, child, dependencies);
 			if (problem) {
 				child.state = "paused";
 				child.stateReason = problem;

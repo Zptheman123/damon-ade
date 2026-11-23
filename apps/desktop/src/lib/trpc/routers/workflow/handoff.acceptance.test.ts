@@ -266,6 +266,48 @@ describe.if(bash !== null && git !== null)(
 			);
 		}, 120_000);
 
+		it("an agent whose branch is behind the checkout catches up before its subtask starts", async () => {
+			const t = await team("behind");
+			// The app moved on in the user's checkout after the agents' branches were cut.
+			writeFileSync(join(t.repo, "src", "app.js"), "export const app = 1;\n");
+			sh(t.repo, "add", "-A");
+			sh(t.repo, "commit", "-qm", "the app so far");
+			const main = sh(t.repo, "rev-parse", "HEAD");
+			fake.setSteps([
+				{
+					name: "split",
+					text: '```json\n{"subtasks": [{"title": "Theme", "description": "Theme.", "specialist": "UI", "route": "quick", "dependsOn": []}], "reason": "one feature"}\n```',
+					cost: 0.01,
+				},
+				{
+					name: "theme",
+					write: { "src/theme.js": "export const theme = 1;\n", ...done },
+					cost: 0.01,
+				},
+				{ name: "theme-review", text: "VERDICT: PASS", cost: 0.01 },
+			]);
+			const created = await tasks.createTask({
+				workspaceId: t.ids.lead,
+				description: "Add a theme",
+				split: true,
+			});
+			await controller.idle();
+			const all = (await tasks.getProjectTasks({ workspaceId: t.ids.lead }))
+				.tasks;
+			// The UI agent worked on top of the app, and the review saw only its file.
+			expect(sh(t.ui, "merge-base", "--is-ancestor", main, "HEAD")).toBe("");
+			const review = fake.calls().find((c) => c.step === "theme-review");
+			expect(review?.stdin).toContain(
+				"## This task's changes\n- src/theme.js\n\n",
+			);
+			// And the result came back to the checkout as a fast-forward.
+			expect(all.find((x) => x.slug === created.slug)?.stateReason).toContain(
+				"Merged into",
+			);
+			expect(sh(t.repo, "ls-files")).toContain("src/theme.js");
+			expect(sh(t.repo, "rev-list", "--merges", "HEAD")).toBe("");
+		}, 120_000);
+
 		it("a finished request leaves the user's checkout alone when its uncommitted work is in the way, and says where the result is", async () => {
 			const t = await team("dirty");
 			// The user is editing README.md in their checkout; the result changes it too.
