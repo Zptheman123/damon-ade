@@ -31,6 +31,7 @@ function isRunning(tab: Tab): boolean {
  */
 export function useTeamChatTab(workspaceId: string | undefined) {
 	const { openPreset } = useTabsWithPresets();
+	const utils = electronTrpc.useUtils();
 	const setActiveTab = useTabsStore((s) => s.setActiveTab);
 	const removeTab = useTabsStore((s) => s.removeTab);
 	// Saved tabs load after start-up: decide only once they have, or a tab
@@ -75,19 +76,30 @@ export function useTeamChatTab(workspaceId: string | undefined) {
 				if (focus) setActiveTab(workspaceId, running.id);
 				return;
 			}
-			openPreset(
-				workspaceId,
-				{
-					id: "team-chat",
-					name: launch.tabName,
-					cwd: launch.cwd,
-					commands: [launch.command],
-					executionMode: "new-tab",
-				},
-				{ target: "new-tab" },
-			);
+			// The command is read now, not from the cached query: once the
+			// Team chat has a conversation it resumes it (--resume) instead of
+			// starting the same session id again ("already in use").
+			void utils.workflow.teamChatLaunch
+				.fetch({ workspaceId }, { staleTime: 0 })
+				.then((fresh) => {
+					if (!fresh.enabled) return;
+					openPreset(
+						workspaceId,
+						{
+							id: "team-chat",
+							name: fresh.tabName,
+							cwd: fresh.cwd,
+							commands: [fresh.command],
+							executionMode: "new-tab",
+						},
+						{ target: "new-tab" },
+					);
+				})
+				.catch((error) =>
+					console.warn("[team-chat] Could not start the Team chat:", error),
+				);
 		},
-		[workspaceId, launch, teamTabs, setActiveTab, removeTab, openPreset],
+		[workspaceId, launch, teamTabs, setActiveTab, removeTab, openPreset, utils],
 	);
 
 	useEffect(() => {
