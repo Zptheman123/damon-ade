@@ -20,6 +20,7 @@ export const RUN_LABELS: Record<RunKind, string> = {
 	research: "Research",
 	split: "Split across the team",
 	checks: "Run checks",
+	deps: "Dependency audit",
 };
 
 /** Manual steps each route offers, in order. */

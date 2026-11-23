@@ -43,6 +43,7 @@ import {
 	taskSpecialists,
 	taskSpend,
 	validateWorkflowSettings,
+	wantsDependencyAudit,
 } from "main/lib/agent-workflow";
 import {
 	addCommandApproval,
@@ -109,6 +110,7 @@ const executionSchema = z.object({
 	maxEscalations: z.number(),
 	pinModels: z.boolean(),
 	cheaperFallback: z.boolean(),
+	dependencyAudit: z.enum(["fix", "report", "off"]).optional(),
 });
 
 const settingsInputSchema = z.object({
@@ -397,6 +399,7 @@ function describeTask(
 		probes.branchNow,
 	);
 	const specialists = taskSpecialists(homeDir, project, task, settings);
+	const changed = changedFilesOf(task);
 	const next =
 		task.state === "done" ||
 		task.state === "cancelled" ||
@@ -405,11 +408,8 @@ function describeTask(
 			? undefined
 			: decideNext(task, files, checks, settings, {
 					codeState: probes.codeStateOf(task.identity.worktreePath),
-					customRoles: customRoleContext(
-						specialists,
-						task,
-						changedFilesOf(task),
-					),
+					customRoles: customRoleContext(specialists, task, changed),
+					dependencyAudit: wantsDependencyAudit(specialists, task, changed),
 				});
 	let nextRouting: ReturnType<typeof stageRouting>["routing"] | null = null;
 	if (next?.type === "run") {
@@ -558,12 +558,26 @@ function describeTask(
 			fallbackFrom: run.fallbackFrom ?? null,
 			reportedCostUsd: run.reportedCostUsd ?? null,
 			liveCostUsd: run.liveCostUsd ?? null,
-			costState: run.costState ?? (run.kind === "checks" ? null : "unknown"),
+			costState:
+				run.costState ??
+				(run.kind === "checks" || run.kind === "deps" ? null : "unknown"),
 			unpricedModels: run.unpricedModels ?? [],
 			failure: run.failure ?? null,
 			error: run.error ?? null,
 			/** Tool calls the CLI refused in this run (history). */
 			permissionDenials: run.permissionDenials ?? [],
+			/** ADE's dependency audit (kind "deps"). */
+			audit: run.audit
+				? {
+						state: run.audit.state,
+						manager: run.audit.manager ?? null,
+						summary: run.summary ?? "",
+						fixed: run.audit.fixed,
+						advisories: run.audit.advisories.slice(0, 8),
+						notes: run.audit.notes,
+						commands: run.audit.commands,
+					}
+				: null,
 			verdict: run.verdict ?? null,
 			checks: run.checks ?? null,
 			summary: run.summary ? run.summary.slice(-1500) : null,

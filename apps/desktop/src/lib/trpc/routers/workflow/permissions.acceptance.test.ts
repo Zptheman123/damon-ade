@@ -322,6 +322,8 @@ describe.if(bash !== null && git !== null)("permission-blocked work", () => {
 			["plan", "succeeded"],
 			["build", "blocked"],
 			["build", "succeeded"],
+			// It created package.json: Auto's dependency audit (no model).
+			["deps", "succeeded"],
 			["review", "succeeded"],
 		]);
 		const calls = fake.calls().slice(beforeResume);
@@ -539,6 +541,7 @@ describe.if(bash !== null && git !== null)("permission-blocked work", () => {
 			["escalate", "succeeded"],
 			["build", "blocked"],
 			["build", "succeeded"],
+			["deps", "succeeded"],
 			["review", "succeeded"],
 		]);
 		// History and costs are kept; the open permission report is closed.

@@ -9,7 +9,7 @@ export const usd = (value: number) => `$${value.toFixed(value < 1 ? 3 : 2)}`;
  * a qualifier.
  */
 export function runCostLabel(run: RunView): string | null {
-	if (run.kind === "checks") return null;
+	if (run.kind === "checks" || run.kind === "deps") return null;
 	if (run.failure === "launch" && run.liveCostUsd === null) return null;
 	if (run.reportedCostUsd !== null) return usd(run.reportedCostUsd);
 	const amount = run.liveCostUsd;

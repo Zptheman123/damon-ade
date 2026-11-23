@@ -26,6 +26,7 @@ export {
 	type Decision,
 	type DecisionContext,
 	decideNext,
+	dependencyNoteFor,
 	evidenceView,
 	STAGE_ROLE,
 	stageRouting,
@@ -34,6 +35,7 @@ export {
 	type TaskSpend,
 	taskSpecialists,
 	taskSpend,
+	wantsDependencyAudit,
 } from "./controller";
 export {
 	branchChange,

@@ -8,6 +8,7 @@ import { treeKillWithEscalation } from "../tree-kill";
 import { scheduleSessionRecording, transcriptPathFor } from "../usage-metrics";
 import { runChecks } from "./checks";
 import { TaskController } from "./controller";
+import { runAuditCommand } from "./dependency-audit";
 import { listWorkflowProjects, type ProjectWorkflow } from "./project-workflow";
 import { startStageRun } from "./stage-runner";
 import { listTaskRecords } from "./tasks";
@@ -56,6 +57,8 @@ export function getTaskController(): TaskController {
 			startStageRun(spec, { killTree, onProgress }),
 		runChecks: ({ cwd, commands, signal }) =>
 			runChecks({ cwd, commands, signal, shell: checkShell(), killTree }),
+		// Auto's dependency audit: the project's own package manager.
+		runAudit: runAuditCommand(killTree),
 		newId: randomUUID,
 		now: () => new Date(),
 		env: process.env,

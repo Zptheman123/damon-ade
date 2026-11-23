@@ -45,6 +45,13 @@ interface Draft {
 }
 
 type PermissionProfile = "edits" | "edits-and-checks" | "bypass";
+type AuditPolicy = "fix" | "report" | "off";
+
+const AUDIT_LABELS: Record<AuditPolicy, string> = {
+	fix: "Audit and apply safe fixes",
+	report: "Audit and report only",
+	off: "Off",
+};
 
 interface ExecutionData {
 	permissions: PermissionProfile;
@@ -54,6 +61,7 @@ interface ExecutionData {
 	maxEscalations: number;
 	pinModels: boolean;
 	cheaperFallback: boolean;
+	dependencyAudit?: AuditPolicy;
 }
 
 interface ExecutionDraft {
@@ -64,6 +72,7 @@ interface ExecutionDraft {
 	maxEscalations: string;
 	pinModels: boolean;
 	cheaperFallback: boolean;
+	dependencyAudit: AuditPolicy;
 }
 
 type LimitKey =
@@ -113,6 +122,7 @@ function toDraft(settings: SettingsData): Draft {
 			maxEscalations: String(settings.execution.maxEscalations),
 			pinModels: settings.execution.pinModels,
 			cheaperFallback: settings.execution.cheaperFallback,
+			dependencyAudit: settings.execution.dependencyAudit ?? "fix",
 		},
 	};
 }
@@ -221,6 +231,7 @@ export function ModelsSettings({ visibleItems }: ModelsSettingsProps) {
 				maxEscalations: Number(draft.execution.maxEscalations),
 				pinModels: draft.execution.pinModels,
 				cheaperFallback: draft.execution.cheaperFallback,
+				dependencyAudit: draft.execution.dependencyAudit,
 			},
 		});
 	};
@@ -352,6 +363,42 @@ export function ModelsSettings({ visibleItems }: ModelsSettingsProps) {
 										(profile) => (
 											<SelectItem key={profile} value={profile}>
 												{PERMISSION_LABELS[profile]}
+											</SelectItem>
+										),
+									)}
+								</SelectContent>
+							</Select>
+						</div>
+						<div className="flex items-center justify-between gap-4">
+							<div>
+								<Label
+									htmlFor="task-dependency-audit"
+									className="text-sm font-medium"
+								>
+									Dependency audit (Auto)
+								</Label>
+								<p className="text-xs text-muted-foreground mt-0.5 max-w-[360px]">
+									When a task changes dependencies, ADE runs the project's
+									package manager audit itself (no model run). Safe fixes never
+									use --force or install scripts and keep your overrides; only
+									high or critical issues in production dependencies ask for a
+									fix.
+								</p>
+							</div>
+							<Select
+								value={draft.execution.dependencyAudit}
+								onValueChange={(value) =>
+									setExecution({ dependencyAudit: value as AuditPolicy })
+								}
+							>
+								<SelectTrigger id="task-dependency-audit" className="w-[300px]">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									{(Object.keys(AUDIT_LABELS) as AuditPolicy[]).map(
+										(policy) => (
+											<SelectItem key={policy} value={policy}>
+												{AUDIT_LABELS[policy]}
 											</SelectItem>
 										),
 									)}

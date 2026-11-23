@@ -15,6 +15,7 @@ import {
 	type TaskRoute,
 } from "shared/utils/task-routing";
 import type { PermissionDenial } from "./command-approvals";
+import type { DependencyAudit } from "./dependency-audit";
 import type { ProjectWorkflow } from "./project-workflow";
 import type { TaskRoleOverrides } from "./specialists";
 import type { SplitPlan } from "./split";
@@ -49,7 +50,7 @@ export const MODEL_STAGES = [
 export type ModelStage = (typeof MODEL_STAGES)[number];
 
 /** Everything a run can be: a model stage, or ADE running the checks. */
-export const RUN_KINDS = [...MODEL_STAGES, "checks"] as const;
+export const RUN_KINDS = [...MODEL_STAGES, "checks", "deps"] as const;
 export type RunKind = (typeof RUN_KINDS)[number];
 
 /** Kept for callers of the first version; equals MODEL_STAGES. */
@@ -151,6 +152,8 @@ export interface TaskRun {
 	checks?: CheckResult[];
 	/** The exact approved commands a checks run ran (kind "checks"). */
 	commands?: string[];
+	/** ADE's dependency audit (kind "deps"). */
+	audit?: DependencyAudit;
 	/**
 	 * The worktree's code state (identity.ts codeState) when the run ended.
 	 * Check and review results count only while the code is unchanged.

@@ -26,6 +26,14 @@ import {
 	permissionOutcome,
 } from "./command-approvals";
 import {
+	auditDependencies,
+	auditFeedback,
+	auditSummary,
+	type DependencyAudit,
+	type RunAuditCommand,
+	touchesDependencies,
+} from "./dependency-audit";
+import {
 	branchChange,
 	captureIdentity,
 	codeState,
@@ -126,6 +134,8 @@ export type Decision =
 			reason: string;
 	  }
 	| { type: "checks"; reason: string }
+	/** ADE audits the dependencies itself (dependency-audit.ts), no model. */
+	| { type: "deps"; reason: string }
 	| { type: "done"; reason: string }
 	| { type: "pause"; reason: string }
 	| { type: "needs-input"; reason: string }
@@ -169,7 +179,8 @@ export function taskSpend(task: TaskRecord): TaskSpend {
 		unboundedRuns: 0,
 	};
 	for (const run of task.runs) {
-		if (run.kind === "checks" || run.status === "queued") continue;
+		if (run.kind === "checks" || run.kind === "deps" || run.status === "queued")
+			continue;
 		// A run that never started spent nothing.
 		if (run.failure === "launch" && run.liveCostUsd === undefined) continue;
 		if (run.status === "running") spend.pendingRuns++;
@@ -356,6 +367,11 @@ export interface DecisionContext {
 	 * implementation and passing checks (before the review).
 	 */
 	customRoles?: { before: CustomRoleRef[]; after: CustomRoleRef[] };
+	/**
+	 * Auto's dependency-security step applies: the task changed dependency
+	 * files, or it is QA work (wantsDependencyAudit).
+	 */
+	dependencyAudit?: boolean;
 }
 
 /**
@@ -419,7 +435,7 @@ export function decideNext(
 					last.model
 						? cheaperFallback(last.model)
 						: undefined;
-				if (fallback && kind !== "checks") {
+				if (fallback && kind !== "checks" && kind !== "deps") {
 					return {
 						type: "run",
 						kind,
@@ -667,6 +683,39 @@ export function decideNext(
 	const fresh = (run: TaskRun) =>
 		current === undefined || run.codeState === current;
 
+	// Dependency security, Auto's default QA step: ADE runs the package
+	// manager's audit (and its non-breaking fix) itself, after the
+	// dependencies changed. Only high or critical production advisories that
+	// remain ask for a correction; the rest go to the review as notes.
+	if (
+		task.mode === "auto" &&
+		context.dependencyAudit &&
+		(settings.execution.dependencyAudit ?? "fix") !== "off"
+	) {
+		const lastDeps = lastIndex(
+			t,
+			(run) => run.kind === "deps" && run.status === "succeeded",
+		);
+		if (lastDeps < lastImpl || !fresh(t.runs[lastDeps])) {
+			const reruns = t.runs
+				.slice(lastImpl + 1)
+				.filter((r) => r.kind === "deps").length;
+			if (reruns >= 3) {
+				return {
+					type: "block",
+					reason: "The code keeps changing while the dependency audit runs.",
+				};
+			}
+			return { type: "deps", reason: "audit the dependencies" };
+		}
+		if (t.runs[lastDeps].audit?.state === "failed") {
+			return correctOrBlock(
+				"The dependency audit still finds high or critical advisories in production dependencies",
+				"the dependency audit found high or critical advisories",
+			);
+		}
+	}
+
 	// Checks after the last change: the exact approved commands, on this code.
 	if (checks.commands.length > 0) {
 		const lastChecks = lastIndex(
@@ -793,6 +842,10 @@ export function correctionFeedback(task: TaskRecord): string {
 				`Check \`${check.command}\` ${check.timedOut ? "timed out" : `failed (exit ${check.exitCode})`}:\n\`\`\`\n${check.outputTail.slice(-2500)}\n\`\`\``,
 			);
 		}
+	}
+	const lastDeps = [...task.runs].reverse().find((run) => run.kind === "deps");
+	if (lastDeps?.audit?.state === "failed") {
+		parts.push(auditFeedback(lastDeps.audit));
 	}
 	const lastReview = [...task.runs]
 		.reverse()
@@ -984,6 +1037,44 @@ export function stageRouting(
 	};
 }
 
+/**
+ * What reviewers are told about the latest dependency audit: the summary,
+ * what the package manager fixed, and the remaining advisories as notes
+ * (no extra run: the review happens anyway).
+ */
+export function dependencyNoteFor(task: TaskRecord): string | undefined {
+	const run = [...task.runs].reverse().find((r) => r.kind === "deps");
+	const audit = run?.audit;
+	if (!audit || audit.state === "skipped") return undefined;
+	const list = audit.advisories
+		.slice(0, 10)
+		.map(
+			(a) =>
+				`- ${a.name} (${a.severity}${a.devOnly ? ", development only" : ""})${a.title ? `: ${a.title}` : ""}`,
+		)
+		.join("\n");
+	const notes = audit.notes.length ? `\n${audit.notes.join("\n")}` : "";
+	const remaining = list
+		? `\nRemaining advisories (only high or critical ones in production dependencies block a task; these did not):\n${list}`
+		: "";
+	return `## Dependency audit (run by ADE)
+${auditSummary(audit)}${notes}${remaining}
+Note anything this change makes worse; do not fail the review for advisories it did not introduce.`;
+}
+
+/** Auto's dependency audit applies: dependencies changed, or this is QA work. */
+export function wantsDependencyAudit(
+	specialists: TaskSpecialists,
+	task: TaskRecord,
+	changedFiles: string[],
+): boolean {
+	if (touchesDependencies(changedFiles)) return true;
+	const qa = [specialists.primary, ...specialists.supporting].some(
+		(s) => s?.specialist.templateId === "qa",
+	);
+	return qa && !task.isRequest;
+}
+
 /** Files the task has changed so far (empty outside git). */
 export function changedFilesOf(task: TaskRecord): string[] {
 	try {
@@ -1102,6 +1193,8 @@ export interface ControllerDeps {
 		commands: string[];
 		signal: AbortSignal;
 	}) => Promise<CheckResult[]>;
+	/** Runs one package-manager audit command (dependency-audit.ts). */
+	runAudit?: RunAuditCommand;
 	newId: () => string;
 	now: () => Date;
 	env?: NodeJS.ProcessEnv;
@@ -1513,6 +1606,7 @@ export class TaskController {
 			return `The task is ${task.state}`;
 		if (
 			kind !== "checks" &&
+			kind !== "deps" &&
 			taskSpend(task).worstCaseUsd >= task.limits.budgetUsd
 		) {
 			return "The task's budget may be used up (counting uncertain costs at their cap); raise it to continue";
@@ -1537,6 +1631,9 @@ export class TaskController {
 						(run) =>
 							run.kind === "checks" &&
 							(run.checks ?? []).some((c) => c.exitCode !== 0 || c.timedOut),
+					) ||
+					evidence.runs.some(
+						(run) => run.kind === "deps" && run.audit?.state === "failed",
 					);
 				return failed ? undefined : "There is no failed check or review to fix";
 			}
@@ -1546,6 +1643,8 @@ export class TaskController {
 					: "There is no open escalation report";
 			case "custom":
 				return undefined;
+			case "deps":
+				return implemented ? undefined : "Nothing has been implemented yet";
 			default:
 				return undefined;
 		}
@@ -1588,6 +1687,8 @@ export class TaskController {
 			task.state = "idle";
 			task.stateReason = undefined;
 			if (kind === "checks") return this.launchChecks(project, task, false);
+			if (kind === "deps")
+				return this.launchDependencyAudit(project, task, false);
 			return this.launchModel(project, task, kind, {
 				modelOverride,
 				customRoleId,
@@ -1626,11 +1727,7 @@ export class TaskController {
 			settings,
 			{
 				codeState: this.codeStateOf(task.identity.worktreePath),
-				customRoles: customRoleContext(
-					taskSpecialists(this.deps.homeDir, project, task, settings),
-					task,
-					changedFilesOf(task),
-				),
+				...this.decisionContextFor(project, task, settings),
 			},
 		);
 		switch (decision.type) {
@@ -1654,6 +1751,8 @@ export class TaskController {
 				});
 			case "checks":
 				return this.launchChecks(project, task, true);
+			case "deps":
+				return this.launchDependencyAudit(project, task, true);
 			case "done":
 				task.state = "done";
 				task.stateReason = `Verified: ${decision.reason}.`;
@@ -1760,6 +1859,10 @@ export class TaskController {
 				stage: kind,
 				task,
 				hasResearch: files.hasResearch,
+				dependencyNote:
+					kind === "review" || readOnly
+						? dependencyNoteFor(evidenceView(task))
+						: undefined,
 				projectNote:
 					kind === "research" || kind === "triage"
 						? undefined
@@ -2557,6 +2660,148 @@ ${(run.summary ?? "").trim()}
 			task,
 			applyTriage(task, decision, keepUsers ? undefined : match?.id),
 		);
+	}
+
+	/**
+	 * What decideNext needs besides the task files: the specialist roles
+	 * that apply, and whether Auto's dependency audit does.
+	 */
+	decisionContextFor(
+		project: ProjectWorkflow,
+		task: TaskRecord,
+		settings: WorkflowSettings,
+	): Pick<DecisionContext, "customRoles" | "dependencyAudit"> {
+		const specialists = taskSpecialists(
+			this.deps.homeDir,
+			project,
+			task,
+			settings,
+		);
+		const changed = changedFilesOf(task);
+		return {
+			customRoles: customRoleContext(specialists, task, changed),
+			dependencyAudit: wantsDependencyAudit(specialists, task, changed),
+		};
+	}
+
+	/** ADE audits the dependencies itself: no model, no prompt. */
+	private launchDependencyAudit(
+		project: ProjectWorkflow,
+		task: TaskRecord,
+		continueAfter: boolean,
+	): TaskRecord {
+		const policy = this.deps.loadSettings().execution.dependencyAudit ?? "fix";
+		const run: TaskRun = {
+			id: this.deps.newId(),
+			kind: "deps",
+			status: "running",
+			attempt: this.nextAttempt(task, "deps"),
+			queuedAt: this.deps.now().toISOString(),
+			startedAt: this.deps.now().toISOString(),
+		};
+		task.runs.push(run);
+		task.state = "running";
+		task.stateReason = "auditing the dependencies";
+		saveTask(project, task);
+		this.changed(project, task.slug);
+
+		const abort = new AbortController();
+		this.live.set(run.id, {
+			project,
+			slug: task.slug,
+			title: task.title,
+			worktree: task.identity.worktreePath,
+			cancel: async () => abort.abort(),
+		});
+		const runAudit = this.deps.runAudit;
+		const audit: Promise<DependencyAudit> = runAudit
+			? auditDependencies({
+					cwd: task.identity.worktreePath,
+					policy,
+					run: runAudit,
+					signal: abort.signal,
+				}).catch(
+					(error): DependencyAudit => ({
+						state: "unavailable",
+						reason: String(error),
+						counts: { info: 0, low: 0, moderate: 0, high: 0, critical: 0 },
+						advisories: [],
+						fixed: [],
+						commands: [],
+						notes: [],
+					}),
+				)
+			: Promise.resolve({
+					state: "unavailable",
+					reason: "No audit runner is configured.",
+					counts: { info: 0, low: 0, moderate: 0, high: 0, critical: 0 },
+					advisories: [],
+					fixed: [],
+					commands: [],
+					notes: [],
+				});
+		this.track(
+			project,
+			task.slug,
+			audit.then((result) =>
+				this.finishDependencyAudit(
+					project,
+					task.slug,
+					run.id,
+					result,
+					abort.signal.aborted,
+					continueAfter,
+				),
+			),
+		);
+		return task;
+	}
+
+	private finishDependencyAudit(
+		project: ProjectWorkflow,
+		slug: string,
+		runId: string,
+		audit: DependencyAudit,
+		aborted: boolean,
+		continueAfter: boolean,
+	): Promise<TaskRecord | undefined> {
+		this.live.delete(runId);
+		return withTaskLock(project, slug, () => {
+			const task = getTask(project, slug);
+			const run = task?.runs.find((r) => r.id === runId);
+			if (!task || !run || run.status !== "running") return task;
+			run.endedAt = this.deps.now().toISOString();
+			run.audit = audit;
+			run.summary = [auditSummary(audit), ...audit.notes].join("\n");
+			run.commands = audit.commands;
+			// After the fix: later evidence counts for this code.
+			run.codeState = this.codeStateOf(task.identity.worktreePath);
+			if (aborted || task.state === "cancelled") {
+				run.status = "cancelled";
+				run.failure = "cancelled";
+				saveTask(project, task);
+				this.changed(project, slug);
+				return task;
+			}
+			// Findings are a recorded result; an audit that could not run
+			// never blocks the task (it is reported to the review instead).
+			run.status = "succeeded";
+			if (task.mode === "manual" || !continueAfter) {
+				task.state = "idle";
+				task.stateReason = auditSummary(audit);
+				saveTask(project, task);
+				this.changed(project, slug);
+				return task;
+			}
+			if (task.pauseRequested) {
+				task.state = "paused";
+				task.stateReason = "Paused.";
+				saveTask(project, task);
+				this.changed(project, slug);
+				return task;
+			}
+			return this.advance(project, task);
+		});
 	}
 
 	private launchChecks(

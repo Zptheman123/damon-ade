@@ -11,6 +11,7 @@ import {
 	WORKFLOW_SUBAGENTS,
 	type WorkflowSubagent,
 } from "./agent-workflow";
+import { AUDIT_POLICIES, type AuditPolicy } from "./dependency-audit";
 import { isPlausibleModel } from "./workflow-check";
 
 /**
@@ -73,6 +74,12 @@ export interface ExecutionSettings {
 	pinModels: boolean;
 	/** On an unavailable model, retry once on the next cheaper tier. */
 	cheaperFallback: boolean;
+	/**
+	 * Auto mode's dependency-security step (dependency-audit.ts): "fix"
+	 * audits and applies the package manager's non-breaking fix, "report"
+	 * only audits, "off" skips it.
+	 */
+	dependencyAudit: AuditPolicy;
 }
 
 export interface RoleRouting {
@@ -109,6 +116,7 @@ export function defaultExecutionSettings(): ExecutionSettings {
 		maxEscalations: 2,
 		pinModels: true,
 		cheaperFallback: true,
+		dependencyAudit: "fix",
 	};
 }
 
@@ -235,6 +243,12 @@ export function validateWorkflowSettings(input: unknown): ValidationResult {
 			errors.push(`${key} must be a whole number from 0 to 20`);
 		}
 	}
+	if (
+		execution?.dependencyAudit !== undefined &&
+		!AUDIT_POLICIES.includes(execution.dependencyAudit)
+	) {
+		errors.push(`dependencyAudit must be one of ${AUDIT_POLICIES.join(", ")}`);
+	}
 	for (const key of ["pinModels", "cheaperFallback"] as const) {
 		if (typeof execution?.[key] !== "boolean")
 			errors.push(`${key} must be true or false`);
@@ -272,6 +286,8 @@ export function validateWorkflowSettings(input: unknown): ValidationResult {
 				maxEscalations: (execution as ExecutionSettings).maxEscalations,
 				pinModels: (execution as ExecutionSettings).pinModels,
 				cheaperFallback: (execution as ExecutionSettings).cheaperFallback,
+				dependencyAudit:
+					(execution as ExecutionSettings).dependencyAudit ?? "fix",
 			},
 		},
 	};

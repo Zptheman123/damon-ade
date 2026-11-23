@@ -61,6 +61,27 @@ export function RunRow({ run, onOpenSession, onOpenUrl }: RunRowProps) {
 									{failedChecks.map((check) => check.command).join(", ")}
 								</span>
 							))}
+						{run.audit && (
+							<span
+								className={cn(
+									run.audit.state === "clean" && "text-emerald-600",
+									run.audit.state === "failed" && "text-destructive",
+									run.audit.state === "warnings" && "text-amber-600",
+									(run.audit.state === "skipped" ||
+										run.audit.state === "unavailable") &&
+										"text-muted-foreground",
+								)}
+								data-audit-state={run.audit.state}
+							>
+								{run.audit.state === "clean"
+									? "no known vulnerabilities"
+									: run.audit.state === "failed"
+										? "high/critical in production"
+										: run.audit.state === "warnings"
+											? "advisories noted"
+											: run.audit.state}
+							</span>
+						)}
 						{run.history && (
 							<span
 								className="text-muted-foreground"
@@ -137,6 +158,26 @@ export function RunRow({ run, onOpenSession, onOpenUrl }: RunRowProps) {
 								</li>
 							))}
 						</ul>
+					)}
+					{run.audit?.summary && (
+						<div className="space-y-0.5 text-muted-foreground" data-run-audit>
+							{run.audit.summary.split("\n").map((line) => (
+								<p key={line} className="break-words">
+									{line}
+								</p>
+							))}
+							{run.audit.advisories.length > 0 && (
+								<ul className="list-disc pl-4">
+									{run.audit.advisories.slice(0, 5).map((a) => (
+										<li key={`${a.name}-${a.title ?? ""}`}>
+											{a.name} ({a.severity}
+											{a.devOnly ? ", dev only" : ""})
+											{a.title ? `: ${a.title}` : ""}
+										</li>
+									))}
+								</ul>
+							)}
+						</div>
 					)}
 					{run.error && (
 						<p className="break-words text-destructive">
