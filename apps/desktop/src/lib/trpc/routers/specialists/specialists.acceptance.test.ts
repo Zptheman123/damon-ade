@@ -976,8 +976,16 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		expect(calls[6].stdin).toContain(
 			"## This task's changes\n- src/button.js\n\n",
 		);
-		// The team's main branch was not touched.
-		expect(sh(repo, "rev-parse", "HEAD")).toBe(mainHead);
+		// The finished request was brought into the checkout it was sent from
+		// as a fast-forward to the last agent's branch: main has both agents'
+		// work, its history kept, and nothing left uncommitted.
+		expect(sh(repo, "rev-parse", "HEAD")).not.toBe(mainHead);
+		expect(sh(repo, "merge-base", "--is-ancestor", mainHead, "HEAD")).toBe("");
+		expect(sh(repo, "rev-parse", "HEAD")).toBe(
+			sh(frontPath, "rev-parse", "HEAD"),
+		);
+		expect(sh(repo, "ls-files")).toContain(apiFile);
+		expect(sh(repo, "ls-files")).toContain("src/button.js");
 		expect(sh(repo, "status", "--porcelain")).toBe("");
 
 		// An agent's own tasks use its specialty by default.

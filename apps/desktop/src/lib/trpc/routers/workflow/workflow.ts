@@ -117,6 +117,7 @@ const executionSchema = z.object({
 	cheaperFallback: z.boolean(),
 	dependencyAudit: z.enum(["fix", "report", "off"]).optional(),
 	keepGoing: z.boolean().optional(),
+	deliverResult: z.boolean().optional(),
 });
 
 const settingsInputSchema = z.object({

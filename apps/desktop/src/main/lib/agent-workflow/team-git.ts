@@ -14,8 +14,10 @@ import { dirname, join } from "node:path";
  * their own worktrees of the team's repository, on their own branches. When
  * a subtask depends on one another agent finished, ADE commits that
  * subtask's own files on its agent's branch and merges the commit into the
- * dependent agent's branch before it starts. Nothing else is committed,
- * nothing is pushed, and the team's main branch is never merged into.
+ * dependent agent's branch before it starts. When the whole request is
+ * done, its final work is merged the same way into the checkout the
+ * request was sent from (controller deliverRequest). Nothing else is
+ * committed and nothing is pushed.
  */
 
 function git(

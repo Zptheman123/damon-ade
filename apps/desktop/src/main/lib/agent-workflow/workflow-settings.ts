@@ -97,6 +97,12 @@ export interface ExecutionSettings {
 	 * (retried once).
 	 */
 	autoResume: boolean;
+	/**
+	 * A finished team request brings its result into the checkout it was
+	 * sent from (a fast-forward when possible, else a merge), never
+	 * overwriting uncommitted work and undoing a conflicting merge.
+	 */
+	deliverResult: boolean;
 }
 
 export interface RoleRouting {
@@ -137,6 +143,7 @@ export function defaultExecutionSettings(): ExecutionSettings {
 		keepGoing: true,
 		autoChecks: true,
 		autoResume: true,
+		deliverResult: true,
 	};
 }
 
@@ -275,6 +282,12 @@ export function validateWorkflowSettings(input: unknown): ValidationResult {
 	) {
 		errors.push("keepGoing must be true or false");
 	}
+	if (
+		execution?.deliverResult !== undefined &&
+		typeof execution.deliverResult !== "boolean"
+	) {
+		errors.push("deliverResult must be true or false");
+	}
 	for (const key of ["pinModels", "cheaperFallback"] as const) {
 		if (typeof execution?.[key] !== "boolean")
 			errors.push(`${key} must be true or false`);
@@ -317,6 +330,7 @@ export function validateWorkflowSettings(input: unknown): ValidationResult {
 				keepGoing: (execution as ExecutionSettings).keepGoing ?? true,
 				autoChecks: (execution as ExecutionSettings).autoChecks ?? true,
 				autoResume: (execution as ExecutionSettings).autoResume ?? true,
+				deliverResult: (execution as ExecutionSettings).deliverResult ?? true,
 			},
 		},
 	};

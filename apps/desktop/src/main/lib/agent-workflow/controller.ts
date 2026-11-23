@@ -2815,22 +2815,15 @@ ${(run.summary ?? "").trim()}
 			const sameFolder = folderKey(dependency.identity.worktreePath) === here;
 			if (sameFolder && !merging) continue;
 			let leftOut: Array<{ path: string; why: string }> = [];
-			if (!dependency.resultCommit) {
-				const { files, skipped } = handoffFiles(changedFilesOf(dependency));
-				leftOut = skipped;
-				if (files.length === 0) continue;
-				const committed = commitFiles(
-					dependency.identity.worktreePath,
-					files,
-					dependency.accepted
-						? `${dependency.title}\n\nADE team request subtask, accepted by the user as is.`
-						: `${dependency.title}\n\nADE team request subtask, verified by its review.`,
-				);
+			let commit = dependency.resultCommit;
+			if (!commit) {
+				const committed = this.commitResult(project, dependency);
 				if ("error" in committed) {
 					return `Could not commit "${dependency.title}" in ${dependency.agentName ? `${dependency.agentName}'s folder` : dependency.identity.worktreePath} for "${subtask.title}" to build on: ${committed.error}`;
 				}
-				dependency.resultCommit = committed.commit;
-				saveTask(project, dependency);
+				leftOut = committed.leftOut;
+				if (!committed.commit) continue;
+				commit = committed.commit;
 				if (sameFolder) {
 					subtask.handoffs = [
 						...(subtask.handoffs ?? []),
@@ -2848,7 +2841,7 @@ ${(run.summary ?? "").trim()}
 			const stamp = this.deps.now().toISOString().replace(/[:.]/g, "-");
 			const result = integrateCommit(
 				subtask.identity.worktreePath,
-				dependency.resultCommit,
+				commit,
 				`Bring in "${dependency.title}" (ADE team request)`,
 				join(project.dir, "handoff-backups", `${stamp}-${subtask.slug}`),
 			);
@@ -2858,7 +2851,7 @@ ${(run.summary ?? "").trim()}
 					{
 						at: this.deps.now().toISOString(),
 						from: dependency.title,
-						commit: dependency.resultCommit,
+						commit,
 						result: result.status,
 						movedAside: result.movedAside.length
 							? result.movedAside
@@ -2871,6 +2864,118 @@ ${(run.summary ?? "").trim()}
 			return `Could not bring "${dependency.title}" into ${destination}: ${result.explanation}`;
 		}
 		return undefined;
+	}
+
+	/**
+	 * Commit a finished subtask's own files once on its branch (build output
+	 * and private files left out) and remember the commit. No commit when it
+	 * changed nothing that is handed on.
+	 */
+	private commitResult(
+		project: ProjectWorkflow,
+		task: TaskRecord,
+	):
+		| { commit?: string; leftOut: Array<{ path: string; why: string }> }
+		| { error: string } {
+		if (task.resultCommit) return { commit: task.resultCommit, leftOut: [] };
+		const { files, skipped } = handoffFiles(changedFilesOf(task));
+		if (files.length === 0) return { leftOut: skipped };
+		const committed = commitFiles(
+			task.identity.worktreePath,
+			files,
+			task.accepted
+				? `${task.title}\n\nADE team request subtask, accepted by the user as is.`
+				: `${task.title}\n\nADE team request subtask, verified by its review.`,
+		);
+		if ("error" in committed) return { error: committed.error };
+		task.resultCommit = committed.commit;
+		saveTask(project, task);
+		return { commit: committed.commit, leftOut: skipped };
+	}
+
+	/**
+	 * A finished team request brings its result into the checkout it was
+	 * sent from, so the app is where the user looks for it (measured: the
+	 * Test App's result stayed on an agent's branch until the user paid for
+	 * a task to move it). Each final subtask's work is committed on its
+	 * agent's branch and merged in (integrateCommit: a fast-forward when
+	 * possible; uncommitted work is never overwritten; a conflicting merge
+	 * is undone). Nothing is pushed. Returns the sentence for the request's
+	 * reason: where the work is now, or why it was left on the branches.
+	 */
+	private deliverRequest(
+		project: ProjectWorkflow,
+		request: TaskRecord,
+		ends: TaskRecord[],
+		where: (task: TaskRecord) => string,
+	): string {
+		const home = request.identity.worktreePath;
+		const places = [...new Set(ends.map(where))];
+		const onBranches = places.length
+			? ` The work is in ${places.join(" and ")}.`
+			: "";
+		const elsewhere = ends.filter(
+			(c) => folderKey(c.identity.worktreePath) !== folderKey(home),
+		);
+		if (
+			elsewhere.length === 0 ||
+			!(this.deps.loadSettings().execution.deliverResult ?? true)
+		) {
+			return onBranches;
+		}
+		const head = currentBranch(home);
+		const branch = head === "HEAD" ? undefined : head;
+		const expected = request.identity.branch;
+		if (!branch || (expected && branch !== expected)) {
+			return `${onBranches} It was not merged into ${home}: that folder is on ${branch ? `branch ${branch}` : "no branch"} now${expected ? `, not ${expected}` : ""}.`;
+		}
+		const busy = this.folderBusy(project, request);
+		if (busy) {
+			return `${onBranches} It was not merged into ${branch} because a task is running in ${home}.`;
+		}
+		const merged: string[] = [];
+		for (const end of elsewhere) {
+			const committed = this.commitResult(project, end);
+			if ("error" in committed) {
+				return `${onBranches} Could not commit "${end.title}" to bring it into ${branch}: ${committed.error}`;
+			}
+			if (!committed.commit) continue;
+			const stamp = this.deps.now().toISOString().replace(/[:.]/g, "-");
+			const result = integrateCommit(
+				home,
+				committed.commit,
+				`Bring in "${end.title}" (ADE team request "${request.title}")`,
+				join(project.dir, "handoff-backups", `${stamp}-${request.slug}`),
+			);
+			if (result.status === "merged" || result.status === "already-in") {
+				request.handoffs = [
+					...(request.handoffs ?? []),
+					{
+						at: this.deps.now().toISOString(),
+						from: end.title,
+						commit: committed.commit,
+						result: result.status,
+						movedAside: result.movedAside.length
+							? result.movedAside
+							: undefined,
+						leftOut: committed.leftOut.length ? committed.leftOut : undefined,
+					},
+				];
+				merged.push(end.title);
+				continue;
+			}
+			const why =
+				result.status === "conflict"
+					? `merging it would conflict in ${result.paths.join(", ")}, so ADE undid the merge and ${home} is as it was`
+					: result.status === "needs-decision"
+						? `${home} has uncommitted files the result also creates, with other contents (${result.paths.join(", ")}); ADE did not touch them`
+						: `git refused, leaving ${home} as it was (${result.explanation})`;
+			const source = end.identity.branch ?? committed.commit.slice(0, 7);
+			return `${merged.length ? ` Merged into ${branch}: ${merged.map((t) => `"${t}"`).join(", ")}.` : ""} "${end.title}" is still only in ${where(end)}: ${why}. To bring it in yourself: git merge ${source}`;
+		}
+		return merged.length
+			? ` Merged into ${branch} in ${home}, ready to run there.`
+			: onBranches;
 	}
 
 	/**
@@ -2979,9 +3084,9 @@ ${(run.summary ?? "").trim()}
 								folderKey(c.identity.worktreePath),
 					),
 			);
-			const places = [...new Set(ends.map(where))];
+			const delivered = this.deliverRequest(project, request, ends, where);
 			request.state = "done";
-			request.stateReason = `Verified: all ${done.length} subtask(s) are done${cancelled ? `; ${cancelled} cancelled` : ""}.${places.length ? ` The work is in ${places.join(" and ")}.` : ""}`;
+			request.stateReason = `Verified: all ${done.length} subtask(s) are done${cancelled ? `; ${cancelled} cancelled` : ""}.${delivered}`;
 		} else {
 			const first = stopped[0];
 			request.state = "paused";

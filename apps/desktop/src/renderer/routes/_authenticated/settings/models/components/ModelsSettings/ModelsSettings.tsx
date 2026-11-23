@@ -63,6 +63,7 @@ interface ExecutionData {
 	cheaperFallback: boolean;
 	dependencyAudit?: AuditPolicy;
 	keepGoing?: boolean;
+	deliverResult?: boolean;
 }
 
 interface ExecutionDraft {
@@ -75,6 +76,7 @@ interface ExecutionDraft {
 	cheaperFallback: boolean;
 	dependencyAudit: AuditPolicy;
 	keepGoing: boolean;
+	deliverResult: boolean;
 }
 
 type LimitKey =
@@ -126,6 +128,7 @@ function toDraft(settings: SettingsData): Draft {
 			cheaperFallback: settings.execution.cheaperFallback,
 			dependencyAudit: settings.execution.dependencyAudit ?? "fix",
 			keepGoing: settings.execution.keepGoing ?? true,
+			deliverResult: settings.execution.deliverResult ?? true,
 		},
 	};
 }
@@ -236,6 +239,7 @@ export function ModelsSettings({ visibleItems }: ModelsSettingsProps) {
 				cheaperFallback: draft.execution.cheaperFallback,
 				dependencyAudit: draft.execution.dependencyAudit,
 				keepGoing: draft.execution.keepGoing,
+				deliverResult: draft.execution.deliverResult,
 			},
 		});
 	};
@@ -498,6 +502,26 @@ export function ModelsSettings({ visibleItems }: ModelsSettingsProps) {
 								id="keep-going"
 								checked={draft.execution.keepGoing}
 								onCheckedChange={(keepGoing) => setExecution({ keepGoing })}
+							/>
+						</div>
+						<div className="flex items-start justify-between gap-4">
+							<div className="space-y-1">
+								<Label htmlFor="deliver-result" className="text-sm font-medium">
+									Bring finished team work into your checkout
+								</Label>
+								<p className="text-xs text-muted-foreground">
+									When a team request is done, ADE merges the agents' result
+									into the folder you sent it from (a fast-forward when
+									possible). It never overwrites uncommitted work and undoes a
+									merge that would conflict, telling you where the work is.
+								</p>
+							</div>
+							<Switch
+								id="deliver-result"
+								checked={draft.execution.deliverResult}
+								onCheckedChange={(deliverResult) =>
+									setExecution({ deliverResult })
+								}
 							/>
 						</div>
 					</section>

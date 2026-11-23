@@ -250,6 +250,98 @@ describe.if(bash !== null && git !== null)(
 			expect(
 				all.find((x) => x.title === "Fix shell accessibility")?.resultCommit,
 			).toBeTruthy();
+
+			// The finished result is in the checkout the request was sent from,
+			// committed (a fast-forward), with nothing private or generated.
+			const request = all.find((x) => x.slug === created.slug);
+			const branch = sh(t.repo, "symbolic-ref", "--short", "HEAD");
+			expect(request?.stateReason).toContain(`Merged into ${branch}`);
+			const mine = sh(t.repo, "ls-files");
+			for (const file of ["src/store.js", "src/shell.js", "src/views.js"]) {
+				expect(mine).toContain(file);
+			}
+			expect(sh(t.repo, "status", "--porcelain")).toBe("");
+			expect(sh(t.repo, "rev-parse", "HEAD")).toBe(
+				sh(t.repo, "rev-parse", "ade/frontend"),
+			);
+		}, 120_000);
+
+		it("a finished request leaves the user's checkout alone when its uncommitted work is in the way, and says where the result is", async () => {
+			const t = await team("dirty");
+			// The user is editing README.md in their checkout; the result changes it too.
+			writeFileSync(join(t.repo, "README.md"), "# My notes\n");
+			fake.setSteps([
+				{
+					name: "split",
+					text: '```json\n{"subtasks": [{"title": "Readme", "description": "Docs.", "specialist": "Frontend", "route": "quick", "dependsOn": []}], "reason": "one feature"}\n```',
+					cost: 0.01,
+				},
+				{
+					name: "readme",
+					write: { "README.md": "# Calendar app\n", ...done },
+					cost: 0.01,
+				},
+				{ name: "readme-review", text: "VERDICT: PASS", cost: 0.01 },
+			]);
+			const head = sh(t.repo, "rev-parse", "HEAD");
+			const created = await tasks.createTask({
+				workspaceId: t.ids.lead,
+				description: "Write the readme",
+				split: true,
+			});
+			await controller.idle();
+			const all = (await tasks.getProjectTasks({ workspaceId: t.ids.lead }))
+				.tasks;
+			const request = all.find((x) => x.slug === created.slug);
+			expect(request?.state).toBe("done");
+			expect(request?.stateReason).toContain("is still only in Frontend Agent");
+			expect(request?.stateReason).toContain("git merge ade/frontend");
+			expect(sh(t.repo, "rev-parse", "HEAD")).toBe(head);
+			expect(text(join(t.repo, "README.md"))).toBe("# My notes\n");
+		}, 120_000);
+
+		it("with delivery off, the result stays on the agent's branch", async () => {
+			const settings = await import(
+				"main/lib/agent-workflow/workflow-settings"
+			);
+			const saved = settings.loadWorkflowSettings(TEST_HOME);
+			settings.saveWorkflowSettings(TEST_HOME, {
+				...saved,
+				execution: { ...saved.execution, deliverResult: false },
+			});
+			try {
+				const t = await team("nodeliver");
+				fake.setSteps([
+					{
+						name: "split",
+						text: '```json\n{"subtasks": [{"title": "Store", "description": "Store.", "specialist": "Frontend", "route": "quick", "dependsOn": []}], "reason": "one feature"}\n```',
+						cost: 0.01,
+					},
+					{
+						name: "store",
+						write: { "src/store.js": "export const store = 1;\n", ...done },
+						cost: 0.01,
+					},
+					{ name: "store-review", text: "VERDICT: PASS", cost: 0.01 },
+				]);
+				const head = sh(t.repo, "rev-parse", "HEAD");
+				const created = await tasks.createTask({
+					workspaceId: t.ids.lead,
+					description: "Add the store",
+					split: true,
+				});
+				await controller.idle();
+				const request = (
+					await tasks.getProjectTasks({ workspaceId: t.ids.lead })
+				).tasks.find((x) => x.slug === created.slug);
+				expect(request?.state).toBe("done");
+				expect(request?.stateReason).toContain(
+					"The work is in Frontend Agent (ade/frontend)",
+				);
+				expect(sh(t.repo, "rev-parse", "HEAD")).toBe(head);
+			} finally {
+				settings.saveWorkflowSettings(TEST_HOME, saved);
+			}
 		}, 120_000);
 
 		it("someone's uncommitted file that differs from the incoming one pauses the request with its exact path, touching nothing", async () => {
