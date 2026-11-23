@@ -86,6 +86,17 @@ export interface ExecutionSettings {
 	 * its open findings are added to a later subtask (QA first).
 	 */
 	keepGoing: boolean;
+	/**
+	 * Without saved checks, verify Auto tasks with the project's own
+	 * typecheck, lint and test scripts (checks.ts effectiveChecks).
+	 */
+	autoChecks: boolean;
+	/**
+	 * Continue on its own after a stop that needs no decision: a rate
+	 * limit (after a wait), ADE restarting mid-run, or a one-off run error
+	 * (retried once).
+	 */
+	autoResume: boolean;
 }
 
 export interface RoleRouting {
@@ -124,6 +135,8 @@ export function defaultExecutionSettings(): ExecutionSettings {
 		cheaperFallback: true,
 		dependencyAudit: "fix",
 		keepGoing: true,
+		autoChecks: true,
+		autoResume: true,
 	};
 }
 
@@ -302,6 +315,8 @@ export function validateWorkflowSettings(input: unknown): ValidationResult {
 				dependencyAudit:
 					(execution as ExecutionSettings).dependencyAudit ?? "fix",
 				keepGoing: (execution as ExecutionSettings).keepGoing ?? true,
+				autoChecks: (execution as ExecutionSettings).autoChecks ?? true,
+				autoResume: (execution as ExecutionSettings).autoResume ?? true,
 			},
 		},
 	};

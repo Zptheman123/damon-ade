@@ -16,7 +16,7 @@ import {
 } from "main/lib/project-history/task-history";
 import { loadProjectConfig } from "main/lib/project-type/config";
 import { projectPromptNote } from "main/lib/project-type/prompt-note";
-import { checksPassed, loadProjectChecks } from "./checks";
+import { checksPassed, effectiveChecks } from "./checks";
 import {
 	approvalCovers,
 	approvalRule,
@@ -141,7 +141,12 @@ export type Decision =
 	/** ADE audits the dependencies itself (dependency-audit.ts), no model. */
 	| { type: "deps"; reason: string }
 	| { type: "done"; reason: string }
-	| { type: "pause"; reason: string }
+	| {
+			type: "pause";
+			reason: string;
+			/** Auto-resume after this long (a rate limit), when enabled. */
+			retryAfterMs?: number;
+	  }
 	| { type: "needs-input"; reason: string }
 	| { type: "block"; reason: string }
 	| { type: "reroute"; route: "implement"; reason: string };
@@ -191,9 +196,14 @@ export function taskSpend(task: TaskRecord): TaskSpend {
 		const known = run.reportedCostUsd ?? run.liveCostUsd ?? 0;
 		spend.usd += known;
 		if (run.costState === "partial") spend.partialRuns++;
+		// A finished run whose every response ADE priced as it streamed has
+		// cost about that much, also when it was stopped or cut short; only a
+		// running run, or one with unpriced or no usage, counts at its cap.
 		const certain =
 			run.reportedCostUsd !== undefined ||
-			(run.status === "succeeded" && run.costState === "estimated");
+			(run.status !== "running" &&
+				run.costState === "estimated" &&
+				run.liveCostUsd !== undefined);
 		if (certain) {
 			spend.worstCaseUsd += known;
 			continue;
@@ -340,6 +350,46 @@ function appendNotes(
 	);
 }
 
+/**
+ * Specialist roles that must pass before a task is done: security. The
+ * others (accessibility, test quality, API contracts...) advise the review.
+ */
+export function blockingRole(role: { id: string; name: string }): boolean {
+	return /secur|threat|auth/i.test(`${role.id} ${role.name}`);
+}
+
+/**
+ * What the review is told the advisory specialist roles found (the latest
+ * run of each), so one review weighs them instead of each role starting
+ * its own fix loop.
+ */
+export function advisoryNoteFor(task: TaskRecord): string | undefined {
+	const latest = new Map<string, TaskRun>();
+	for (const run of task.runs) {
+		if (
+			run.kind === "custom" &&
+			run.customRoleId &&
+			run.status === "succeeded"
+		) {
+			latest.set(run.customRoleId, run);
+		}
+	}
+	const notes = [...latest.values()]
+		.filter(
+			(run) =>
+				run.verdict === "FAIL" &&
+				!blockingRole({ id: run.customRoleId ?? "", name: run.role ?? "" }),
+		)
+		.map(
+			(run) =>
+				`### ${run.role ?? "Specialist"}\n${(run.summary ?? "").replace(/\s*VERDICT:\s*FAIL\s*$/i, "").slice(-2000)}`,
+		);
+	if (!notes.length) return undefined;
+	return `## Specialist notes (advisory)
+These specialist reviewers raised the points below. They do not decide on their own: you do. Fail the review only for points that make the task's result wrong, broken, insecure, or clearly below what was asked; mention the rest as follow-ups.
+${notes.join("\n\n")}`;
+}
+
 const NEEDS_IMPLEMENTER = /Needs implementer/i;
 
 /** A quick run that found the change is too big did not implement it. */
@@ -479,11 +529,23 @@ export function decideNext(
 					reason: `${last.model ?? "The model"} is unavailable for this account or provider.`,
 				};
 			}
-			case "rate-limited":
+			case "rate-limited": {
+				// Waits of 5, 10 and 20 minutes before asking the user.
+				let streak = 0;
+				for (let i = t.runs.length - 1; i >= 0; i--) {
+					if (t.runs[i].failure !== "rate-limited") break;
+					streak++;
+				}
+				const retryAfterMs =
+					streak <= 3 ? 5 * 60_000 * 2 ** (streak - 1) : undefined;
 				return {
 					type: "pause",
-					reason: "Rate limited. Resume when the limit resets.",
+					reason: retryAfterMs
+						? `Rate limited. ADE tries again in ${Math.round(retryAfterMs / 60_000)} minutes.`
+						: "Rate limited several times in a row. Resume when the limit resets.",
+					retryAfterMs,
 				};
+			}
 			case "auth":
 				return {
 					type: "block",
@@ -499,6 +561,12 @@ export function decideNext(
 				};
 			case "cancelled":
 				return { type: "none" };
+			case "permission":
+				// Never retried: it needs the user's approval (permissionBlock).
+				return {
+					type: "pause",
+					reason: "Waiting for your approval of a refused command.",
+				};
 			case "interrupted":
 				return {
 					type: "pause",
@@ -509,11 +577,33 @@ export function decideNext(
 					type: "block",
 					reason: `The ${kind} run could not start: ${last.error ?? ""}`.trim(),
 				};
-			default:
+			default: {
+				// One retry for a one-off failure (a dropped connection, a
+				// crash); a second failure in a row stops for the user.
+				const before = t.runs[t.runs.length - 2];
+				const repeated =
+					before &&
+					before.kind === kind &&
+					before.status !== "succeeded" &&
+					before.failure === last.failure;
+				if (
+					!repeated &&
+					kind !== "checks" &&
+					kind !== "deps" &&
+					(settings.execution.autoResume ?? true)
+				) {
+					return {
+						type: "run",
+						kind,
+						customRoleId: last.customRoleId,
+						reason: `the ${kind} run failed (${(last.error ?? "error").slice(0, 120)}); trying once more`,
+					};
+				}
 				return {
 					type: "block",
 					reason: `The ${kind} run failed: ${(last.error ?? "unknown error").slice(0, 300)}`,
 				};
+			}
 		}
 	}
 
@@ -783,6 +873,9 @@ export function decideNext(
 	}
 
 	// The specialist's read-only roles after implementation and checks.
+	// Advisory by default: each runs once, and what it finds goes to the
+	// independent review (which decides) instead of starting fix loops of
+	// its own. Security roles still block until they pass.
 	for (const role of context.customRoles?.after ?? []) {
 		const last = lastIndex(
 			t,
@@ -791,6 +884,21 @@ export function decideNext(
 				run.customRoleId === role.id &&
 				run.status === "succeeded",
 		);
+		if (!blockingRole(role)) {
+			const ranOnce = t.runs.some(
+				(run) =>
+					run.kind === "custom" &&
+					run.customRoleId === role.id &&
+					run.status === "succeeded",
+			);
+			if (ranOnce) continue;
+			return {
+				type: "run",
+				kind: "custom",
+				customRoleId: role.id,
+				reason: `${role.name} after implementation (advisory: notes for the review)`,
+			};
+		}
 		if (last < lastImpl || !fresh(t.runs[last])) {
 			const rounds = t.runs.filter(
 				(run) => run.kind === "custom" && run.customRoleId === role.id,
@@ -1331,6 +1439,8 @@ export class TaskController {
 	 * stay "running" and are marked interrupted at the next start (recover).
 	 */
 	async shutdown(timeoutMs = 3000): Promise<void> {
+		for (const timer of this.resumeTimers) clearTimeout(timer);
+		this.resumeTimers.clear();
 		const kills = [...this.live.values()].map((live) =>
 			live.cancel().catch(() => undefined),
 		);
@@ -1372,9 +1482,18 @@ export class TaskController {
 		return task;
 	}
 
-	private approvedChecks(project: ProjectWorkflow): ApprovedChecks {
-		const checks = loadProjectChecks(project);
-		return { commands: checks.approvedAt ? checks.commands : [] };
+	/** The checks this task is verified with (saved, or the project's own). */
+	private approvedChecks(
+		project: ProjectWorkflow,
+		task?: TaskRecord,
+	): ApprovedChecks {
+		return {
+			commands: effectiveChecks(
+				project,
+				task?.identity.worktreePath ?? project.root,
+				this.deps.loadSettings().execution.autoChecks ?? true,
+			).commands,
+		};
 	}
 
 	/**
@@ -1406,10 +1525,47 @@ export class TaskController {
 						"ADE stopped while a run was in progress. Check the work, then resume.";
 					saveTask(project, task);
 					recovered++;
+					// Auto tasks continue by themselves once ADE has settled.
+					if (
+						task.mode === "auto" &&
+						(this.deps.loadSettings().execution.autoResume ?? true)
+					) {
+						task.stateReason =
+							"ADE stopped while a run was in progress; it continues on its own in a moment.";
+						saveTask(project, task);
+						this.resumeLater(project, slug, 15_000);
+					}
 				}
 			}
 		}
 		return recovered;
+	}
+
+	private resumeTimers = new Set<ReturnType<typeof setTimeout>>();
+
+	/**
+	 * Resume a paused task later, without the user (a rate limit's wait,
+	 * ADE settling after a restart). Skipped if the user has moved it on.
+	 */
+	private resumeLater(
+		project: ProjectWorkflow,
+		slug: string,
+		ms: number,
+	): void {
+		const timer = setTimeout(() => {
+			this.resumeTimers.delete(timer);
+			const task = getTask(project, slug);
+			if (!task || task.state !== "paused" || activeRun(task)) return;
+			this.track(
+				project,
+				slug,
+				this.resume(project, slug).catch((error) =>
+					console.warn("[workflow] Automatic resume failed:", error),
+				),
+			);
+		}, ms);
+		timer.unref?.();
+		this.resumeTimers.add(timer);
 	}
 
 	/** Start or continue a task in its mode (Auto advances; Manual waits). */
@@ -1765,7 +1921,7 @@ export class TaskController {
 			const blocker = TaskController.manualBlocker(
 				task,
 				readTaskFiles(project, slug),
-				this.approvedChecks(project),
+				this.approvedChecks(project, task),
 				kind,
 			);
 			if (blocker) throw new Error(blocker);
@@ -1822,7 +1978,7 @@ export class TaskController {
 		const decision = decideNext(
 			task,
 			readTaskFiles(project, task.slug),
-			this.approvedChecks(project),
+			this.approvedChecks(project, task),
 			settings,
 			{
 				codeState: this.codeStateOf(task.identity.worktreePath),
@@ -1861,6 +2017,12 @@ export class TaskController {
 				task.state = "paused";
 				task.stateReason = decision.reason;
 				saveTask(project, task);
+				if (
+					decision.retryAfterMs &&
+					(this.deps.loadSettings().execution.autoResume ?? true)
+				) {
+					this.resumeLater(project, task.slug, decision.retryAfterMs);
+				}
 				break;
 			case "needs-input":
 				task.state = "needs-input";
@@ -1922,7 +2084,7 @@ export class TaskController {
 			env: this.deps.env,
 		}).model;
 
-		const checks = this.approvedChecks(project);
+		const checks = this.approvedChecks(project, task);
 		const mayRunChecks =
 			settings.execution.permissions !== "edits" && checks.commands.length > 0;
 		const permissionMode: PermissionMode =
@@ -1969,7 +2131,14 @@ export class TaskController {
 						: undefined,
 				dependencyNote:
 					kind === "review" || readOnly
-						? dependencyNoteFor(evidenceView(task))
+						? [
+								dependencyNoteFor(evidenceView(task)),
+								kind === "review"
+									? advisoryNoteFor(evidenceView(task))
+									: undefined,
+							]
+								.filter(Boolean)
+								.join("\n\n") || undefined
 						: undefined,
 				projectNote:
 					kind === "research" || kind === "triage"
@@ -3033,7 +3202,7 @@ ${(run.summary ?? "").trim()}
 		task: TaskRecord,
 		continueAfter: boolean,
 	): TaskRecord {
-		const checks = this.approvedChecks(project);
+		const checks = this.approvedChecks(project, task);
 		const run: TaskRun = {
 			id: this.deps.newId(),
 			kind: "checks",

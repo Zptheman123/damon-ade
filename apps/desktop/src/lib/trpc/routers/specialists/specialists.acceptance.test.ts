@@ -286,7 +286,7 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		);
 	});
 
-	it("Auto routes to the specialist, runs its custom role, corrects on FAIL, and the runner uses the resolved models", async () => {
+	it("Auto routes to the specialist; its advisory role runs once and its findings go to the one review, which decides", async () => {
 		await tasks.setChecks({ workspaceId: "ws-shop", commands: [CHECK] });
 		fake.setSteps([
 			{
@@ -300,16 +300,6 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 			{
 				name: "contract-1",
 				text: "Breaks clients.\nVERDICT: FAIL",
-				cost: 0.01,
-			},
-			{
-				name: "fix",
-				write: { "src/api.js": "export const route = 3;\n" },
-				cost: 0.02,
-			},
-			{
-				name: "contract-2",
-				text: "Compatible now.\nVERDICT: PASS",
 				cost: 0.01,
 			},
 			{ name: "review", text: "Looks good.\nVERDICT: PASS", cost: 0.02 },
@@ -326,11 +316,9 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		expect(task?.specialist?.name).toBe("Backend");
 		expect(task?.specialistReason).toContain("matches Backend");
 		expect(task?.state).toBe("done");
+		// No fix loop of its own: one role run, then the review.
 		expect(task?.runs.map((r) => [r.kind, r.role, r.specialist])).toEqual([
 			["implement", "Implementer", "Backend"],
-			["checks", null, null],
-			["custom", "API Contract Reviewer", "Backend"],
-			["fix", "Implementer", "Backend"],
 			["checks", null, null],
 			["custom", "API Contract Reviewer", "Backend"],
 			["review", "Reviewer", "Backend"],
@@ -343,15 +331,17 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		);
 		// Effort reaches the runner too: Backend implementer medium, reviewer high.
 		expect(flag(calls[0].args, "--effort")).toBe("medium");
-		expect(flag(calls[4].args, "--effort")).toBe("high");
+		expect(flag(calls[2].args, "--effort")).toBe("high");
 		expect(calls[1].stdin).toContain("You are the API Contract Reviewer");
 		expect(calls[1].args).toContain("--disallowedTools");
-		expect(calls[2].stdin).toContain("API Contract Reviewer found problems");
+		// The review weighs the role's findings.
+		expect(calls[2].stdin).toContain("## Specialist notes (advisory)");
+		expect(calls[2].stdin).toContain("Breaks clients.");
 		// The runner gets the resolved models and limits.
 		expect(flag(calls[0].args, "--model")).toBe("claude-sonnet-5-5");
 		expect(flag(calls[0].args, "--max-turns")).toBe("12");
-		expect(flag(calls[4].args, "--model")).toBe("claude-opus-5-5");
-		expect(calls[4].stdin).toContain(
+		expect(flag(calls[2].args, "--model")).toBe("claude-opus-5-5");
+		expect(calls[2].stdin).toContain(
 			"Check validation, authorization, transactions",
 		);
 		for (const call of calls) {

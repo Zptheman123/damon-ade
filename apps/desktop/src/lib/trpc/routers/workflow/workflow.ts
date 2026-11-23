@@ -16,6 +16,7 @@ import {
 	decideNext,
 	defaultWorkflowSettings,
 	EFFORT_LEVELS,
+	effectiveChecks,
 	ensureProjectWorkflow,
 	evidenceView,
 	getTask,
@@ -718,9 +719,6 @@ export const createWorkflowRouter = (
 				const { project } = ctx;
 				const settings = loadWorkflowSettings(deps.homeDir());
 				const projectChecks = loadProjectChecks(project);
-				const approved = {
-					commands: projectChecks.approvedAt ? projectChecks.commands : [],
-				};
 				const states = new Map<string, string | undefined>();
 				const probes: Probes = {
 					branchNow: branchOf(ctx.worktreePath),
@@ -737,7 +735,13 @@ export const createWorkflowRouter = (
 						task,
 						ctx,
 						settings,
-						approved,
+						{
+							commands: effectiveChecks(
+								project,
+								task.identity.worktreePath,
+								settings.execution.autoChecks ?? true,
+							).commands,
+						},
 						probes,
 					),
 				);
@@ -837,10 +841,18 @@ export const createWorkflowRouter = (
 			.query(({ input }) => {
 				const ctx = deps.resolveWorkspace(input.workspaceId);
 				const checks = loadProjectChecks(ctx.project);
+				const settings = loadWorkflowSettings(deps.homeDir());
+				const effective = effectiveChecks(
+					ctx.project,
+					ctx.worktreePath,
+					settings.execution.autoChecks ?? true,
+				);
 				return {
 					commands: checks.commands,
 					approved: !!checks.approvedAt,
 					suggestions: suggestChecks(ctx.worktreePath),
+					/** What Auto verifies with now: saved, the project's own, or none. */
+					effective,
 				};
 			}),
 

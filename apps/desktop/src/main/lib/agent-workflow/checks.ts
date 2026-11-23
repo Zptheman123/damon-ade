@@ -190,3 +190,28 @@ export function checksPassed(
 		results.every((result) => result.exitCode === 0 && !result.timedOut)
 	);
 }
+
+/**
+ * The checks a task is verified with. What the user saved always wins (an
+ * empty saved list means "no checks"). Never configured: the project's own
+ * typecheck, lint and test scripts, read from the task's folder, so Auto
+ * verifies with real commands instead of only with a model's opinion.
+ */
+export function effectiveChecks(
+	project: ProjectWorkflow,
+	worktree: string,
+	auto: boolean,
+): { commands: string[]; source: "approved" | "auto" | "none" } {
+	const saved = loadProjectChecks(project);
+	if (saved.approvedAt) {
+		return {
+			commands: saved.commands,
+			source: saved.commands.length ? "approved" : "none",
+		};
+	}
+	if (!auto) return { commands: [], source: "none" };
+	const suggested = suggestChecks(worktree);
+	return suggested.length
+		? { commands: suggested, source: "auto" }
+		: { commands: [], source: "none" };
+}

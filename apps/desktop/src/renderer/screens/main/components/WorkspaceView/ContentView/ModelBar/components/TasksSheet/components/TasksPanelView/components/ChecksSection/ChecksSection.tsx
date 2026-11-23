@@ -44,19 +44,24 @@ export function ChecksSection({ checks, busy, onSave }: ChecksSectionProps) {
 				</div>
 				<span
 					className={
-						checks?.approved
+						checks?.approved || checks?.effective?.source === "auto"
 							? "rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400"
 							: "rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400"
 					}
 				>
 					{checks?.approved
 						? `${checks.commands.length} approved`
-						: "not approved yet"}
+						: checks?.effective?.source === "auto"
+							? "using the project's scripts"
+							: "none yet"}
 				</span>
 			</div>
 			<p className="text-xs text-muted-foreground">
 				Run after every change; a task is done only when they and an independent
 				review pass. One command per line.
+				{!checks?.approved && checks?.effective?.source === "auto"
+					? ` Until you save your own, Auto runs: ${checks.effective.commands.join(", ")}.`
+					: ""}
 			</p>
 			<Textarea
 				aria-label="Check commands"

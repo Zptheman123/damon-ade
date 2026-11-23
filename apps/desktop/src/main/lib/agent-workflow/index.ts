@@ -11,6 +11,7 @@ export {
 } from "./agent-workflow";
 export {
 	checksPassed,
+	effectiveChecks,
 	loadProjectChecks,
 	type ProjectChecks,
 	runChecks,

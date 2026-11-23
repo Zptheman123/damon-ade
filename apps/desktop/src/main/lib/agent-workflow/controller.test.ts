@@ -465,3 +465,168 @@ describe("taskSpend and the budget", () => {
 		});
 	});
 });
+
+describe("fewer stops, cheaper verification", () => {
+	const roles = {
+		before: [],
+		after: [
+			{
+				id: "ui-accessibility-reviewer",
+				name: "Accessibility Reviewer",
+				access: "read-only" as const,
+			},
+		],
+	};
+	const implemented = [
+		run("implement"),
+		run("checks", { checks: [passed()], commands: ["bun run test"] }),
+	];
+
+	it("an advisory specialist role runs once and its FAIL does not start a fix loop", () => {
+		const first = decideNext(
+			task("implement", implemented),
+			noFiles,
+			checks,
+			settings,
+			{ customRoles: roles },
+		);
+		expect(first).toMatchObject({
+			type: "run",
+			kind: "custom",
+			customRoleId: "ui-accessibility-reviewer",
+		});
+		const failed = run("custom", {
+			customRoleId: "ui-accessibility-reviewer",
+			role: "Accessibility Reviewer",
+			verdict: "FAIL",
+			summary: "No skip link.\nVERDICT: FAIL",
+		});
+		// Its findings go to the review, which decides.
+		expect(
+			decideNext(
+				task("implement", [...implemented, failed]),
+				noFiles,
+				checks,
+				settings,
+				{ customRoles: roles },
+			),
+		).toMatchObject({ type: "run", kind: "review" });
+	});
+
+	it("a security role still blocks until it passes", () => {
+		const security = {
+			before: [],
+			after: [
+				{
+					id: "security-threat-modeler",
+					name: "Threat Modeler",
+					access: "read-only" as const,
+				},
+			],
+		};
+		const failed = run("custom", {
+			customRoleId: "security-threat-modeler",
+			verdict: "FAIL",
+		});
+		expect(
+			decideNext(
+				task("implement", [...implemented, failed]),
+				noFiles,
+				checks,
+				settings,
+				{ customRoles: security },
+			),
+		).toMatchObject({ type: "run", kind: "fix" });
+	});
+
+	it("a rate limit waits 5, 10, then 20 minutes, then asks", () => {
+		const limited = () =>
+			run("implement", { status: "failed", failure: "rate-limited" });
+		const waits = [1, 2, 3, 4].map((streak) => {
+			const d = decideNext(
+				task("implement", Array.from({ length: streak }, limited)),
+				noFiles,
+				noChecks,
+				settings,
+			);
+			return d.type === "pause" ? d.retryAfterMs : "not a pause";
+		});
+		expect(waits).toEqual([300_000, 600_000, 1_200_000, undefined]);
+	});
+
+	it("a one-off run error is retried once; a second in a row stops", () => {
+		const failed = () =>
+			run("build", { status: "failed", failure: "error", error: "exit 1" });
+		expect(
+			decideNext(
+				task("plan", [run("plan"), failed()]),
+				{ ...noFiles, hasPlan: true },
+				noChecks,
+				settings,
+			),
+		).toMatchObject({
+			type: "run",
+			kind: "build",
+		});
+		expect(
+			decideNext(
+				task("plan", [run("plan"), failed(), failed()]),
+				{ ...noFiles, hasPlan: true },
+				noChecks,
+				settings,
+			),
+		).toMatchObject({ type: "block" });
+		const off = defaultWorkflowSettings();
+		off.execution.autoResume = false;
+		expect(
+			decideNext(
+				task("plan", [run("plan"), failed()]),
+				{ ...noFiles, hasPlan: true },
+				noChecks,
+				off,
+			),
+		).toMatchObject({
+			type: "block",
+		});
+	});
+
+	it("a refused command is never retried as an error", () => {
+		expect(
+			decideNext(
+				task("implement", [
+					run("implement", { status: "blocked", failure: "permission" }),
+				]),
+				noFiles,
+				noChecks,
+				settings,
+			),
+		).toMatchObject({ type: "pause" });
+	});
+
+	it("a stopped run counts at its streamed estimate, not at its cap", () => {
+		const stopped = run("build", {
+			status: "failed",
+			failure: "error",
+			reportedCostUsd: undefined,
+			liveCostUsd: 0.35,
+			costState: "estimated",
+			maxBudgetUsd: 8.57,
+		});
+		expect(taskSpend(task("plan", [stopped])).worstCaseUsd).toBeCloseTo(
+			0.35,
+			5,
+		);
+		const unpriced = run("build", {
+			status: "failed",
+			failure: "error",
+			reportedCostUsd: undefined,
+			liveCostUsd: undefined,
+			costState: "unknown",
+			maxBudgetUsd: 8.57,
+		});
+		expect(taskSpend(task("plan", [unpriced])).worstCaseUsd).toBeCloseTo(
+			8.57,
+			5,
+		);
+	});
+});

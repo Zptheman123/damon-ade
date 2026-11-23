@@ -737,9 +737,12 @@ describe.if(bash !== null && git !== null)("Auto mode, end to end", () => {
 
 		// Next start: a fresh controller recovers; nothing is re-run.
 		const callsBefore = fake.calls().length;
+		// Automatic resume off: this is the "resume on request" path.
+		const manualResume = m.settings.defaultWorkflowSettings();
+		manualResume.execution.autoResume = false;
 		const restarted = new m.controller.TaskController({
 			homeDir: TEST_HOME,
-			loadSettings: () => m.settings.defaultWorkflowSettings(),
+			loadSettings: () => manualResume,
 			resolveClaude: () => fake.command,
 			startRun: () => {
 				throw new Error("must not run during recovery");
@@ -759,10 +762,11 @@ describe.if(bash !== null && git !== null)("Auto mode, end to end", () => {
 		expect(task.runs[0].status).toBe("interrupted");
 		expect(fake.calls().length).toBe(callsBefore);
 
-		// The interrupted run's cost is uncertain: it counts at its cap, so the
-		// budget must be raised before ADE launches more.
+		// The interrupted run streamed and priced every response before ADE
+		// stopped it: it counts at that estimate, not at its cap.
 		const paused = await taskOf("ws-restart", created.slug);
-		expect(paused.spend.uncertainRuns).toBe(1);
+		expect(paused.spend.uncertainRuns).toBe(0);
+		expect(paused.spend.worstCaseUsd).toBeLessThan(1);
 		await caller.setBudget({
 			workspaceId: "ws-restart",
 			slug: created.slug,
