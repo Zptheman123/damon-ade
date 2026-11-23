@@ -88,6 +88,20 @@ function checksNote(input: StagePromptInput): string {
 
 const STOP = "When you are done, stop. ADE runs the next step.";
 
+/**
+ * The bar for implementing runs. Measured on a real app: the result
+ * passed every review yet felt like a generic scaffold, and its build was
+ * never run. The user judges the work by running it.
+ */
+export const FINISH_BAR = `## Finish it like a product
+- The user will run this and judge it by what they see. Finish what the task describes end to end: no placeholders, TODO stubs, controls that do nothing, or sample text left in.
+- For anything with an interface: a deliberate, consistent look (spacing, typography, colour, alignment) that matches the app's style, or sets a clean one if there is none; clear empty, loading and error states; and it works with the keyboard and at different window sizes.
+- Before you set Status to \`implemented\`, make sure it builds and runs: run the project's build and tests if you can, and fix what fails.`;
+
+/** For reviews: failures that are not a matter of taste. */
+export const REVIEW_BAR =
+	"For user-facing work, also FAIL on placeholders, TODO stubs, controls that do nothing, or empty and error states the task asks for that are missing. Do not fail work for matters of taste.";
+
 export function stagePrompt(input: StagePromptInput): string {
 	const { stage, task, tasksDir } = input;
 	const dir = `${tasksDir}/${task.slug}`;
@@ -147,6 +161,8 @@ ${task.description}
 2. Make the change.
 3. Keep ${dir}/progress.md current: \`Status: implemented\` when you are done, what you changed, and anything the reviewer should know.
 
+${FINISH_BAR}
+
 ${checksNote(input)}
 
 ${rule}
@@ -170,6 +186,8 @@ ${STOP}`;
 ${roleBody("implementer", tasksDir, task.slug)}
 
 Do every remaining step of ${dir}/plan.md in order, updating progress.md after each. When every step is done, set Status to \`implemented\`.
+
+${FINISH_BAR}
 
 ${checksNote(input)}
 
@@ -210,6 +228,8 @@ ${roleBody("reviewer", tasksDir, task.slug)}
 ${changed}${preexisting}
 
 Use \`git diff\` on those files. ${input.mayRunChecks && input.checks.length ? "You may run the project's checks." : "ADE has already run the project's checks."}
+
+${REVIEW_BAR}
 
 End your reply with exactly one line: \`VERDICT: PASS\` or \`VERDICT: FAIL\`. Any FAIL criterion means FAIL.`;
 		}

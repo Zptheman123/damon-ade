@@ -49,6 +49,35 @@ describe("which checks verify a task", () => {
 		).toEqual(["bun run test"]);
 	});
 
+	it("the app's build counts, but not one that packages an installer or publishes", () => {
+		expect(
+			effectiveChecks(
+				project("build"),
+				worktree("build", { ...scripts, build: "electron-vite build" }),
+				true,
+			).commands,
+		).toEqual([
+			"npm run typecheck",
+			"npm run build",
+			"npm run lint",
+			"npm run test",
+		]);
+		for (const build of [
+			"electron-vite build && electron-builder",
+			"electron-forge make",
+			"tauri build",
+			"vite build && npm publish",
+		]) {
+			expect(
+				effectiveChecks(
+					project(`pkg-${build.length}`),
+					worktree(`pkg-${build.length}`, { build }),
+					true,
+				).commands,
+			).toEqual([]);
+		}
+	});
+
 	it("what the user saved always wins, an empty list included", () => {
 		const p = project("saved");
 		const wt = worktree("saved", scripts);

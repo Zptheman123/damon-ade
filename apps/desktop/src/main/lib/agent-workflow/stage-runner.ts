@@ -134,6 +134,19 @@ interface StreamUsage {
 const num = (value: unknown) =>
 	typeof value === "number" && Number.isFinite(value) ? value : 0;
 
+/**
+ * Why a run ended when Claude gave no result and wrote nothing to stderr:
+ * how far it got and what it last said, instead of a bare "exit 1".
+ */
+export function silentExit(
+	exitCode: number | null,
+	responses: number,
+	lastText: string | undefined,
+): string {
+	const said = lastText?.replace(/\s+/g, " ").trim().slice(-300);
+	return `Claude stopped unexpectedly (exit ${exitCode ?? "unknown"}) without an error message, after ${responses} response(s)${said ? `. Its last message: "${said}"` : ", before saying anything"}. Its work so far is kept; running the step again usually works.`;
+}
+
 /** Classify why a run did not succeed, from its result and stderr. */
 export function classifyFailure(input: {
 	exitCode: number | null;
@@ -335,7 +348,9 @@ export function startStageRun(
 					? (
 							launchError ??
 							extraError ??
-							(text || stderr.trim() || `exit ${exitCode}`)
+							(text ||
+								stderr.trim() ||
+								silentExit(exitCode, live.responses, lastText))
 						).slice(-2000)
 					: undefined,
 				stderrTail: stderr.slice(-4000),

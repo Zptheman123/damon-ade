@@ -91,10 +91,19 @@ export function suggestChecks(root: string): string[] {
 				: existsSync(join(root, "yarn.lock"))
 					? "yarn"
 					: "npm run";
-	return ["typecheck", "lint", "test"]
-		.filter((name) => typeof scripts[name] === "string")
+	const usable = (name: string) =>
+		typeof scripts[name] === "string" &&
+		// A build that packages an installer or publishes is not a check.
+		!(name === "build" && PACKAGES.test(scripts[name] as string));
+	// Build after typecheck: an app that does not build is not done (the
+	// Test App's checks never ran its build).
+	return ["typecheck", "build", "lint", "test"]
+		.filter(usable)
 		.map((name) => `${runner} ${name}`);
 }
+
+const PACKAGES =
+	/electron-builder|electron-forge|\bforge\s+(make|publish)|tauri\s+build|\beas\s|--publish|\bpublish\b|docker\s+(build|push)|\bpkg\b|nexe/i;
 
 export type SpawnFn = typeof spawn;
 
