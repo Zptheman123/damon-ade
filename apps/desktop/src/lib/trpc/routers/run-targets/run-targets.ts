@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
-import { app } from "electron";
+import { app, shell } from "electron";
 import { getSupersetHomeDir } from "main/lib/app-environment";
 import {
 	loadProjectConfig,
@@ -8,7 +8,9 @@ import {
 } from "main/lib/project-type/config";
 import { detectProject, PROJECT_TYPE_INFO } from "main/lib/project-type/detect";
 import {
+	browserPreview,
 	getRunManager,
+	openTargetInBrowser,
 	type RunEvent,
 	sendLocalRequest,
 } from "main/lib/run-targets";
@@ -99,6 +101,12 @@ export const createRunTargetsRouter = () => {
 					targets: ctx.config.targets.map((target) => ({
 						target,
 						run: runs.find((r) => r.targetId === target.id) ?? null,
+						/** Whether "Open localhost" can open it, and as what. */
+						preview: browserPreview(
+							target,
+							ctx.worktree,
+							ctx.config.type ?? undefined,
+						),
 					})),
 					suggested,
 				};
@@ -135,6 +143,31 @@ export const createRunTargetsRouter = () => {
 				failed(error);
 			}
 		}),
+
+		/**
+		 * "Open localhost": open the target's local address in the system
+		 * browser once it answers; with `start`, start it first ("Run and
+		 * open"). Only this workspace's target, only loopback addresses, no
+		 * model involved.
+		 */
+		openInBrowser: publicProcedure
+			.input(ref.extend({ start: z.boolean().default(false) }))
+			.mutation(async ({ input }) => {
+				const ctx = targetOf(input.workspaceId, input.targetId);
+				try {
+					return await openTargetInBrowser({
+						manager: getRunManager(),
+						workspaceId: input.workspaceId,
+						worktree: ctx.worktree,
+						target: ctx.target,
+						projectType: ctx.config.type ?? undefined,
+						start: input.start,
+						open: (url) => shell.openExternal(url),
+					});
+				} catch (error) {
+					failed(error);
+				}
+			}),
 
 		logs: publicProcedure
 			.input(ref)

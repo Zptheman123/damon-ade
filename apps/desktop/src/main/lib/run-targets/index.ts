@@ -3,6 +3,8 @@ export {
 	type ApiResponse,
 	sendLocalRequest,
 } from "./api-request";
+export { type OpenResult, openTargetInBrowser } from "./open-preview";
+export { type BrowserPreview, browserPreview } from "./preview";
 export {
 	defaultProbe,
 	getRunManager,

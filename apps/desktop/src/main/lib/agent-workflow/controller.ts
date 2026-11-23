@@ -2587,9 +2587,19 @@ ${(run.summary ?? "").trim()}
 				Number(folderKey(b.identity.worktreePath) === here) -
 				Number(folderKey(a.identity.worktreePath) === here),
 		);
+		// Checkpoint finished work here only when another agent's work is
+		// about to be merged into an agent's folder (what the merge needs);
+		// ADE never commits in the user's own checkout otherwise.
+		const merging =
+			!!subtask.agentName &&
+			dependencies.some(
+				(d) =>
+					d.state === "done" && folderKey(d.identity.worktreePath) !== here,
+			);
 		for (const dependency of ordered) {
 			if (dependency.state !== "done") continue;
 			const sameFolder = folderKey(dependency.identity.worktreePath) === here;
+			if (sameFolder && !merging) continue;
 			let leftOut: Array<{ path: string; why: string }> = [];
 			if (!dependency.resultCommit) {
 				const { files, skipped } = handoffFiles(changedFilesOf(dependency));

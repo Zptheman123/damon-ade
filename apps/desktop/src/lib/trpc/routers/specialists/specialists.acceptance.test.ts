@@ -1035,7 +1035,9 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		const request = all.find((t) => t.slug === created.slug);
 		const use = all.find((t) => t.slug === request?.subtaskSlugs[1]);
 		expect(use?.state).toBe("paused");
-		expect(use?.stateReason).toContain("merge conflict in src/api.js");
+		expect(use?.stateReason).toContain(
+			"Both agents changed the same lines in src/api.js",
+		);
 		expect(request?.state).toBe("paused");
 		expect(request?.stateReason).toContain('Subtask "Use the API"');
 		// The failed merge was undone: Bo's folder is clean and unchanged.

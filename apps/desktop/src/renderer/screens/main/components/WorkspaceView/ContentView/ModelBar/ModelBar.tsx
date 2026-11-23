@@ -24,6 +24,7 @@ import { useRuntimeAvailability } from "renderer/stores/model-bar/useRuntimeAvai
 import { useAgentSession } from "renderer/stores/tabs/useAgentSession";
 import { GitHubSync } from "./components/GitHubSync";
 import { HistorySheet } from "./components/HistorySheet";
+import { OpenLocalhostButton } from "./components/OpenLocalhostButton";
 import { RunSheet } from "./components/RunSheet";
 import { SpecialistsSheet } from "./components/SpecialistsSheet";
 import { TasksSheet } from "./components/TasksSheet";
@@ -179,6 +180,7 @@ export function ModelBar() {
 						and read the logs
 					</TooltipContent>
 				</Tooltip>
+				{ready && <OpenLocalhostButton workspaceId={workspaceId} runs={runs} />}
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<button
