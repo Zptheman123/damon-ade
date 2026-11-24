@@ -328,6 +328,8 @@ export interface TaskRecord {
 	agentName?: string;
 	/** For a subtask: the commit of its work, once another agent needed it. */
 	resultCommit?: string;
+	/** For a subtask: each time ADE resumed it by itself, and why it had stopped. */
+	autoResumes?: Array<{ at: string; reason: string }>;
 	/**
 	 * For a team request: each time the Team chat's Claude resumed it, with
 	 * what had stopped each subtask (so the same stop is not resumed twice).

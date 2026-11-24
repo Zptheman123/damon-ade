@@ -331,6 +331,58 @@ export function permissionBlockReason(block: PermissionBlock): string {
 	return `Waiting for your approval: the ${block.kind} run was refused permission to run ${named}${more} in ${block.cwd}, so the work is not done. Approve the command in this task, then Resume to retry the ${block.kind}. Planning and earlier work are kept; the Architect is not called for this.`;
 }
 
+/**
+ * How many runs of this kind in a row ended at their turn limit, counted
+ * back from the latest (checks in between do not break the streak).
+ */
+export function turnLimitStreak(runs: TaskRun[], kind: RunKind): number {
+	let streak = 0;
+	for (let i = runs.length - 1; i >= 0; i--) {
+		const run = runs[i];
+		if (run.kind === "checks" || run.kind === "deps") continue;
+		if (run.kind !== kind || run.failure !== "max-turns") break;
+		streak++;
+	}
+	return streak;
+}
+
+/** The turn limit for a run: doubled for each run before it that ran out (at most 4x). */
+export function turnsFor(runs: TaskRun[], kind: RunKind, base: number): number {
+	return base * 2 ** Math.min(turnLimitStreak(runs, kind), 2);
+}
+
+/** Tells a run that follows one that ran out of turns to continue, not restart. */
+function turnLimitNote(task: TaskRecord, kind: RunKind): string {
+	return turnLimitStreak(evidenceView(task).runs, kind) > 0
+		? `\n\n## Continuing\nThe last ${kind} run ran out of turns before it finished. Its work so far is in the folder and in the task's progress file: look at what is there and continue from it; do not start over.\n`
+		: "";
+}
+
+/**
+ * Stops a team subtask may be resumed from by ADE itself: it ran out of
+ * turns, a run kept failing, or ADE was closed while it ran. Everything else
+ * (approvals, questions, budget, repeated reviews) waits for the user.
+ */
+const CONTINUES_ALONE =
+	/hit its turn limit|^The \w+ run failed:|^ADE stopped while this ran/;
+/** Automatic resumes per subtask before the user decides. */
+const MAX_AUTO_RESUMES = 3;
+
+/** Why ADE may resume this stopped subtask by itself, or undefined. */
+export function autoResumeReason(task: TaskRecord): string | undefined {
+	if (!["paused", "blocked", "failed"].includes(task.state)) return undefined;
+	if (activeRun(task) || task.pauseRequested || task.permissionBlock)
+		return undefined;
+	const reason = (task.stateReason ?? "").trim();
+	if (!CONTINUES_ALONE.test(reason)) return undefined;
+	const earlier = task.autoResumes ?? [];
+	if (earlier.length >= MAX_AUTO_RESUMES) return undefined;
+	// The same stop right after an automatic resume: the user decides.
+	if (earlier.at(-1)?.reason === reason) return undefined;
+	if (taskSpend(task).worstCaseUsd >= task.limits.budgetUsd) return undefined;
+	return reason;
+}
+
 /** Block reasons that mean only that corrections or review rounds ran out. */
 const QUALITY_BLOCK =
 	/after \d+ correction\(s\)\.?$|has not passed after \d+ round\(s\)\.?$|No passing review after \d+ review round\(s\)\.?$/;
@@ -642,6 +694,21 @@ export function decideNext(
 			case "budget":
 				return { type: "block", reason: "The run hit its spending cap." };
 			case "max-turns":
+				// Ran out of turns mid-work: continue once, with twice the turns
+				// (launch raises them), before asking the user.
+				if (
+					turnLimitStreak(t.runs, kind) < 2 &&
+					kind !== "checks" &&
+					kind !== "deps" &&
+					(settings.execution.autoResume ?? true)
+				) {
+					return {
+						type: "run",
+						kind,
+						customRoleId: last.customRoleId,
+						reason: `the ${kind} run hit its turn limit; continuing where it stopped, with more turns`,
+					};
+				}
 				return {
 					type: "block",
 					reason: `The ${kind} run hit its turn limit. Raise the limit or narrow the task, then resume.`,
@@ -2335,6 +2402,7 @@ export class TaskController {
 				: "") +
 			reconcileNote(task, kind) +
 			rerouteNote(task, kind) +
+			turnLimitNote(task, kind) +
 			(kind === "triage" || kind === "split"
 				? ""
 				: specialtyNote(
@@ -2358,7 +2426,7 @@ export class TaskController {
 			queuedAt: this.deps.now().toISOString(),
 			model,
 			effort: routing.effort,
-			maxTurns: routing.maxTurns,
+			maxTurns: turnsFor(evidenceView(task).runs, kind, routing.maxTurns),
 			permissionMode,
 			maxBudgetUsd: Number(remaining.toFixed(2)),
 			sessionId: this.deps.newId(),
@@ -2410,7 +2478,7 @@ export class TaskController {
 					prompt,
 					model,
 					effort: routing.effort,
-					maxTurns: routing.maxTurns,
+					maxTurns: run.maxTurns ?? routing.maxTurns,
 					maxBudgetUsd: run.maxBudgetUsd,
 					permissionMode,
 					allowedTools,
@@ -3164,6 +3232,31 @@ ${(run.summary ?? "").trim()}
 				if (stoppedStates.includes(child.state)) {
 					this.carryOverFindings(project, children, child);
 				}
+			}
+		}
+		// Resume by itself: a subtask that ran out of turns, kept failing or
+		// was cut off by a restart continues without the user, once per stop.
+		if (
+			!options.resumeChild &&
+			(this.deps.loadSettings().execution.autoResume ?? true)
+		) {
+			for (const child of children) {
+				const reason = autoResumeReason(child);
+				if (!reason) continue;
+				child.autoResumes = [
+					...(child.autoResumes ?? []),
+					{ at: this.deps.now().toISOString(), reason },
+				];
+				child.state = "running";
+				child.stateReason = `Resuming by itself (${reason})`;
+				saveTask(project, child);
+				this.track(
+					project,
+					child.slug,
+					this.resume(project, child.slug).catch((error) =>
+						this.subtaskFailedToStart(project, child.slug, error),
+					),
+				);
 			}
 		}
 		let stopped = children.filter((c) => stoppedStates.includes(c.state));

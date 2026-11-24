@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { decideNext, taskSpend } from "./controller";
+import {
+	autoResumeReason,
+	decideNext,
+	taskSpend,
+	turnsFor,
+} from "./controller";
 import type { CheckResult, TaskFiles, TaskRecord, TaskRun } from "./tasks";
 import { defaultWorkflowSettings } from "./workflow-settings";
 
@@ -151,13 +156,85 @@ describe("decideNext", () => {
 		});
 	});
 
-	it("stops on a turn limit instead of retrying it", () => {
-		const t = task("implement", [
-			run("implement", { status: "failed", failure: "max-turns" }),
-		]);
-		expect(decideNext(t, noFiles, checks, settings)).toMatchObject({
+	it("continues once after a turn limit, with more turns, then stops", () => {
+		const out = run("implement", { status: "failed", failure: "max-turns" });
+		expect(
+			decideNext(task("implement", [out]), noFiles, checks, settings),
+		).toMatchObject({ type: "run", kind: "implement" });
+		expect(turnsFor([out], "implement", 40)).toBe(80);
+		const again = run("implement", { status: "failed", failure: "max-turns" });
+		expect(
+			decideNext(task("implement", [out, again]), noFiles, checks, settings),
+		).toMatchObject({
 			type: "block",
+			reason: expect.stringContaining("turn limit"),
 		});
+		// At most four times the turns, however often it runs out.
+		expect(turnsFor([out, again, out], "implement", 40)).toBe(160);
+		expect(turnsFor([out, run("checks")], "implement", 40)).toBe(80);
+		expect(turnsFor([out, run("implement")], "implement", 40)).toBe(40);
+		// Without auto-resume it stops at once, as before.
+		const off = {
+			...settings,
+			execution: { ...settings.execution, autoResume: false },
+		};
+		expect(
+			decideNext(task("implement", [out]), noFiles, checks, off),
+		).toMatchObject({ type: "block" });
+	});
+
+	it("resumes a team subtask by itself only for stops it can clear, once per stop", () => {
+		const turns =
+			"The build run hit its turn limit. Raise the limit or narrow the task, then resume.";
+		const stopped = (extra: Partial<TaskRecord> = {}) =>
+			task("plan", [run("plan")], {
+				state: "blocked",
+				stateReason: turns,
+				parentSlug: "req",
+				...extra,
+			});
+		expect(autoResumeReason(stopped())).toBe(turns);
+		expect(
+			autoResumeReason(
+				stopped({ stateReason: "The build run failed: socket hang up" }),
+			),
+		).toBeDefined();
+		// The same stop right after resuming by itself: the user decides.
+		expect(
+			autoResumeReason(stopped({ autoResumes: [{ at: "x", reason: turns }] })),
+		).toBeUndefined();
+		// What only the user can settle is left alone.
+		for (const reason of [
+			"Waiting for your approval: the build run was refused permission",
+			"Accessibility Reviewer still fails after 2 correction(s).",
+			"The task's budget of $10.00 is used up ($10.20 estimated).",
+			"Paused.",
+			"Still blocked after 1 escalation(s): x.md",
+		]) {
+			expect(
+				autoResumeReason(stopped({ stateReason: reason })),
+			).toBeUndefined();
+		}
+		expect(autoResumeReason(stopped({ pauseRequested: true }))).toBeUndefined();
+		expect(
+			autoResumeReason(
+				stopped({
+					limits: { ...stopped().limits, budgetUsd: 0.005 },
+				}),
+			),
+		).toBeUndefined();
+		expect(
+			autoResumeReason(
+				stopped({
+					autoResumes: [
+						{ at: "1", reason: "a" },
+						{ at: "2", reason: "b" },
+						{ at: "3", reason: "c" },
+					],
+				}),
+			),
+		).toBeUndefined();
+		expect(autoResumeReason(stopped({ state: "done" }))).toBeUndefined();
 	});
 
 	it("pauses on a rate limit (temporary) instead of switching models", () => {

@@ -1349,7 +1349,15 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 			text: "Ran out of turns.",
 			cost: 0.01,
 		});
-		fake.setSteps([turnLimit("turns-1")]);
+		// Out of turns: ADE continues by itself (more turns, "continue, do not
+		// start over"), then resumes the stopped subtask once by itself, and
+		// only a third stop in a row waits.
+		fake.setSteps([
+			turnLimit("turns-1"),
+			turnLimit("turns-2"),
+			turnLimit("turns-3"),
+		]);
+		const start = fake.calls().length;
 		await tool("start_plan", {
 			request: "A notes page",
 			plan: {
@@ -1365,10 +1373,20 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 			},
 		});
 		await controller.idle();
+		const runs = fake.calls().slice(start);
+		expect(runs.map((c) => c.step)).toEqual(["turns-1", "turns-2", "turns-3"]);
+		const base = Number(flag(runs[0].args, "--max-turns"));
+		expect(runs.map((c) => Number(flag(c.args, "--max-turns")))).toEqual([
+			base,
+			base * 2,
+			base * 4,
+		]);
+		expect(runs[0].stdin).not.toContain("## Continuing");
+		expect(runs[1].stdin).toContain("continue from it; do not start over");
 		expect((await tool("plan_status")).text).toContain("hit its turn limit");
 
 		// Resumed from the chat, no click: the subtask runs again.
-		fake.setSteps([turnLimit("turns-2")]);
+		fake.setSteps([turnLimit("turns-4")]);
 		const first = await tool("resume_plan");
 		expect(first.isError).toBe(false);
 		expect(first.text).toContain('Resumed "Notes page" (The quick run hit');
