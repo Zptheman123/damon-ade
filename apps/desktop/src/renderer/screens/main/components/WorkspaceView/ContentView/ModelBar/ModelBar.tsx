@@ -25,7 +25,7 @@ import { useAgentSession } from "renderer/stores/tabs/useAgentSession";
 import { useTasksSheet } from "renderer/stores/tasks-sheet";
 import { GitHubSync } from "./components/GitHubSync";
 import { HistorySheet } from "./components/HistorySheet";
-import { OpenLocalhostButton } from "./components/OpenLocalhostButton";
+import { PreviewButton } from "./components/PreviewButton";
 import { RunSheet } from "./components/RunSheet";
 import { SpecialistsSheet } from "./components/SpecialistsSheet";
 import { TasksSheet } from "./components/TasksSheet";
@@ -185,7 +185,7 @@ export function ModelBar() {
 						and read the logs
 					</TooltipContent>
 				</Tooltip>
-				{ready && <OpenLocalhostButton workspaceId={workspaceId} runs={runs} />}
+				{ready && <PreviewButton workspaceId={workspaceId} runs={runs} />}
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<button

@@ -4,12 +4,15 @@ import { app, shell } from "electron";
 import { getSupersetHomeDir } from "main/lib/app-environment";
 import {
 	loadProjectConfig,
+	mergeTargets,
 	type RunTarget,
+	saveProjectConfig,
 } from "main/lib/project-type/config";
 import { detectProject, PROJECT_TYPE_INFO } from "main/lib/project-type/detect";
 import {
 	browserPreview,
 	getRunManager,
+	launchPreview,
 	openTargetInBrowser,
 	type RunEvent,
 	sendLocalRequest,
@@ -64,6 +67,28 @@ function targetOf(workspaceId: string, targetId: string) {
 	return { ...ctx, target };
 }
 
+/**
+ * A saved target, or one ADE detected and the user just chose (from the
+ * Preview button): that one is saved first, as "Add" in Run would.
+ */
+function savedOrDetected(workspaceId: string, targetId: string) {
+	const ctx = context(workspaceId);
+	const saved = ctx.config.targets.find((t) => t.id === targetId);
+	if (saved) return { ...ctx, target: saved };
+	let detected: RunTarget | undefined;
+	try {
+		detected = detectProject(ctx.root).targets.find((t) => t.id === targetId);
+	} catch {
+		// Not detectable: same as not found.
+	}
+	if (!detected) return targetOf(workspaceId, targetId);
+	const config = saveProjectConfig(getSupersetHomeDir(), ctx.root, {
+		...ctx.config,
+		targets: mergeTargets(ctx.config.targets, [detected]),
+	});
+	return { ...ctx, config, target: detected };
+}
+
 function failed(error: unknown): never {
 	throw new TRPCError({
 		code: "BAD_REQUEST",
@@ -91,6 +116,8 @@ export const createRunTargetsRouter = () => {
 				} catch {
 					// Detection is a convenience.
 				}
+				const previewOf = (target: RunTarget) =>
+					browserPreview(target, ctx.worktree, ctx.config.type ?? undefined);
 				return {
 					type: ctx.config.type ?? null,
 					typeName: ctx.config.type
@@ -102,13 +129,14 @@ export const createRunTargetsRouter = () => {
 						target,
 						run: runs.find((r) => r.targetId === target.id) ?? null,
 						/** Whether "Open localhost" can open it, and as what. */
-						preview: browserPreview(
-							target,
-							ctx.worktree,
-							ctx.config.type ?? undefined,
-						),
+						preview: previewOf(target),
 					})),
 					suggested,
+					/** Detected, not saved yet: the Preview button offers them too. */
+					suggestedPreviews: suggested.map((target) => ({
+						target,
+						preview: previewOf(target),
+					})),
 				};
 			}),
 
@@ -156,6 +184,31 @@ export const createRunTargetsRouter = () => {
 				const ctx = targetOf(input.workspaceId, input.targetId);
 				try {
 					return await openTargetInBrowser({
+						manager: getRunManager(),
+						workspaceId: input.workspaceId,
+						worktree: ctx.worktree,
+						target: ctx.target,
+						projectType: ctx.config.type ?? undefined,
+						start: input.start,
+						open: (url) => shell.openExternal(url),
+					});
+				} catch (error) {
+					failed(error);
+				}
+			}),
+
+		/**
+		 * The Preview button: show the app. A web app opens at its local
+		 * address; a desktop app starts in its own window; a mobile app
+		 * starts and returns its device address. A detected target is saved
+		 * on first use. Only when the user clicks; no model involved.
+		 */
+		preview: publicProcedure
+			.input(ref.extend({ start: z.boolean().default(true) }))
+			.mutation(async ({ input }) => {
+				const ctx = savedOrDetected(input.workspaceId, input.targetId);
+				try {
+					return await launchPreview({
 						manager: getRunManager(),
 						workspaceId: input.workspaceId,
 						worktree: ctx.worktree,

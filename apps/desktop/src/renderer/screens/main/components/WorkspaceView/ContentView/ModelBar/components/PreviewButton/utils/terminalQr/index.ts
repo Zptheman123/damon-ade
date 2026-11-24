@@ -1,0 +1,1 @@
+export { terminalQr } from "./terminalQr";
