@@ -1211,6 +1211,7 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 			"team_overview",
 			"start_plan",
 			"plan_status",
+			"resume_plan",
 		]);
 		expect((await rpc("no/such")).error?.message).toContain("Method not found");
 
@@ -1305,9 +1306,13 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		);
 		const command = teamMcpModule.teamChatCommand(config);
 		const settingsPath = config.replace(/\.mcp\.json$/, ".settings.json");
-		expect(
-			JSON.parse(fs.readFileSync(settingsPath, "utf8")).permissions.deny,
-		).toEqual(["Edit", "Write", "NotebookEdit"]);
+		const permissions = JSON.parse(
+			fs.readFileSync(settingsPath, "utf8"),
+		).permissions;
+		expect(permissions.deny).toEqual(["Edit", "Write", "NotebookEdit"]);
+		// Resuming needs no extra click; starting a plan still asks.
+		expect(permissions.allow).toContain("mcp__ade-team__resume_plan");
+		expect(permissions.allow).not.toContain("mcp__ade-team__start_plan");
 		expect(command).toContain(
 			`--settings "${settingsPath.replace(/\\/g, "/")}"`,
 		);
@@ -1315,6 +1320,83 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		expect(command).not.toContain(
 			written.mcpServers["ade-team"].headers.Authorization.slice(7),
 		);
+	}, 120_000);
+
+	it("the Team chat resumes a stopped plan itself, but leaves what only the user can settle", async () => {
+		const repo = makeRepo("resume");
+		workspaces.set("ws-resume", { root: repo, worktree: repo });
+		await tasks.setChecks({ workspaceId: "ws-resume", commands: [] });
+		const tool = async (name: string, args: Record<string, unknown> = {}) => {
+			const reply = (await teamMcp("ws-resume", {
+				jsonrpc: "2.0",
+				id: 1,
+				method: "tools/call",
+				params: { name, arguments: args },
+			})) as {
+				result: { content: Array<{ text: string }>; isError?: boolean };
+			};
+			return {
+				text: reply.result.content[0].text,
+				isError: !!reply.result.isError,
+			};
+		};
+		expect((await tool("resume_plan")).text).toBe("No plan has started yet.");
+
+		const turnLimit = (name: string) => ({
+			name,
+			subtype: "error_max_turns",
+			isError: true,
+			text: "Ran out of turns.",
+			cost: 0.01,
+		});
+		fake.setSteps([turnLimit("turns-1")]);
+		await tool("start_plan", {
+			request: "A notes page",
+			plan: {
+				reason: "one piece",
+				subtasks: [
+					{
+						title: "Notes page",
+						description: "Shows the notes.",
+						route: "quick",
+						dependsOn: [],
+					},
+				],
+			},
+		});
+		await controller.idle();
+		expect((await tool("plan_status")).text).toContain("hit its turn limit");
+
+		// Resumed from the chat, no click: the subtask runs again.
+		fake.setSteps([turnLimit("turns-2")]);
+		const first = await tool("resume_plan");
+		expect(first.isError).toBe(false);
+		expect(first.text).toContain('Resumed "Notes page" (The quick run hit');
+		await controller.idle();
+		expect(fake.remainingSteps()).toBe(0);
+
+		// The same stop right after a resume: the user decides, nothing runs.
+		const before = fake.calls().length;
+		const again = await tool("resume_plan");
+		expect(again.text).toContain("Not resumed. Only the user can settle this:");
+		expect(again.text).toContain('"Notes page" stopped the same way again');
+		await controller.idle();
+		expect(fake.calls().length).toBe(before);
+
+		// A used-up budget is the user's to raise.
+		const all = (await tasks.getProjectTasks({ workspaceId: "ws-resume" }))
+			.tasks;
+		const sub = all.find((t) => t.title === "Notes page");
+		await tasks.setBudget({
+			workspaceId: "ws-resume",
+			slug: sub?.slug ?? "",
+			budgetUsd: 0.01,
+		});
+		const budget = await tool("resume_plan");
+		expect(budget.text).toContain(
+			'"Notes page" has used its $0.01 budget. Only the user can raise it',
+		);
+		expect(fake.calls().length).toBe(before);
 	}, 120_000);
 
 	it("attached files reach the model: their paths are in the prompt and the folder is readable", async () => {

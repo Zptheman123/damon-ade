@@ -328,6 +328,14 @@ export interface TaskRecord {
 	agentName?: string;
 	/** For a subtask: the commit of its work, once another agent needed it. */
 	resultCommit?: string;
+	/**
+	 * For a team request: each time the Team chat's Claude resumed it, with
+	 * what had stopped each subtask (so the same stop is not resumed twice).
+	 */
+	coordinatorResumes?: Array<{
+		at: string;
+		stopped: Array<{ slug: string; reason: string }>;
+	}>;
 }
 
 const MAX_DESCRIPTION_LENGTH = 20_000;
