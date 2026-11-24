@@ -7,6 +7,9 @@ import { getSupersetHomeDir } from "main/lib/app-environment";
 import { getLocalToken } from "main/lib/notifications/local-auth";
 import { getTerminalHostClient } from "main/lib/terminal-host/client";
 import type { ListSessionsResponse } from "main/lib/terminal-host/types";
+import { electronCipher } from "main/lib/vercel/electron-cipher";
+import { syncVercelMcpConfig } from "main/lib/vercel/mcp";
+import { env as sharedEnv } from "shared/env.shared";
 import { DaemonTerminalManager, getDaemonTerminalManager } from "./daemon";
 import { prewarmTerminalEnv, setWorkflowEnvResolver } from "./env";
 import {
@@ -29,9 +32,24 @@ setWorkflowEnvResolver((project) => {
 			console.warn("[terminal] Could not record task folder trust:", error);
 		}
 	}
+	// Vercel connected: claude in this terminal gets the team's Vercel tools
+	// (the wrapper adds --mcp-config when the file exists).
+	let vercelMcp: string | undefined;
+	if (project.workspaceId) {
+		try {
+			vercelMcp = syncVercelMcpConfig(
+				{ homeDir: getSupersetHomeDir(), cipher: electronCipher() },
+				project.workspaceId,
+				sharedEnv.DESKTOP_NOTIFICATIONS_PORT,
+			);
+		} catch (error) {
+			console.warn("[terminal] Could not set up the Vercel tools:", error);
+		}
+	}
 	return {
 		...env,
 		SUPERSET_HOOK_TOKEN: getLocalToken(getSupersetHomeDir(), "hook"),
+		...(vercelMcp ? { SUPERSET_VERCEL_MCP: vercelMcp } : {}),
 	};
 });
 

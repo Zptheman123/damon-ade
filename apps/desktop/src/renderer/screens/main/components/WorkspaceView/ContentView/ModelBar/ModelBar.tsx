@@ -31,6 +31,7 @@ import { SpecialistsSheet } from "./components/SpecialistsSheet";
 import { TasksSheet } from "./components/TasksSheet";
 import { TeamChatSheet } from "./components/TeamChatSheet";
 import { TeamControls } from "./components/TeamControls";
+import { VercelSite } from "./components/VercelSite";
 import { useAttention } from "./hooks/useAttention";
 import { useRunTargets } from "./hooks/useRunTargets";
 import { useTeamChatTab } from "./hooks/useTeamChatTab";
@@ -186,6 +187,7 @@ export function ModelBar() {
 					</TooltipContent>
 				</Tooltip>
 				{ready && <PreviewButton workspaceId={workspaceId} runs={runs} />}
+				{ready && <VercelSite workspaceId={workspaceId} />}
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<button

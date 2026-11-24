@@ -495,6 +495,42 @@ app.delete("/team-mcp/:workspaceId", (_req, res) => {
 	res.status(405).set("Allow", "POST").end();
 });
 
+/**
+ * The agents' Vercel tools (main/lib/vercel/mcp.ts): ADE
+ * calls Vercel with the user's token and answers with what it read.
+ */
+let vercelMcp:
+	| ((workspaceId: string, body: unknown) => Promise<unknown>)
+	| undefined;
+app.post("/vercel-mcp/:workspaceId", async (req, res) => {
+	if (!requireToken(req, res, ["vercel"])) return;
+	try {
+		if (!vercelMcp) {
+			const { createVercelMcpHandler } = await import("main/lib/vercel/mcp");
+			const { defaultVercelMcpDeps } = await import(
+				"lib/trpc/routers/vercel/vercel"
+			);
+			vercelMcp = createVercelMcpHandler(defaultVercelMcpDeps);
+		}
+		const reply = await vercelMcp(req.params.workspaceId, req.body);
+		if (reply === undefined) return res.status(202).end();
+		res.json(reply);
+	} catch (error) {
+		console.error("[vercel-mcp] failed:", error);
+		res.status(500).json({
+			jsonrpc: "2.0",
+			id: null,
+			error: { code: -32603, message: String(error) },
+		});
+	}
+});
+app.get("/vercel-mcp/:workspaceId", (_req, res) => {
+	res.status(405).set("Allow", "POST").end();
+});
+app.delete("/vercel-mcp/:workspaceId", (_req, res) => {
+	res.status(405).set("Allow", "POST").end();
+});
+
 // Health check
 app.get("/health", (_req, res) => {
 	res.json({ status: "ok" });

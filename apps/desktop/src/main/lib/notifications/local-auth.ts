@@ -15,18 +15,23 @@ import { join } from "node:path";
  *   (<ADE home>/team-chat/*.mcp.json, 0600). It lets that Coordinator
  *   session start an agreed plan (POST /team-mcp/:workspaceId); every
  *   start is a tool call Claude Code asks the user to approve.
+ * - vercel-token: only in the agents' Vercel MCP config files
+ *   (<ADE home>/vercel-mcp/*.mcp.json, 0600). It lets those sessions use the
+ *   Vercel tools (POST /vercel-mcp/:workspaceId); ADE holds the Vercel
+ *   token itself.
  *
  * Browsers are kept out by three checks: no CORS headers (so a page cannot
  * send a JSON POST), a Host check (so DNS rebinding cannot reach the server
  * under another name), and refusing any request with a browser Origin.
  */
 
-export type LocalTokenKind = "invoke" | "hook" | "team";
+export type LocalTokenKind = "invoke" | "hook" | "team" | "vercel";
 
 const TOKEN_FILES: Record<LocalTokenKind, string> = {
 	invoke: "invoke-token",
 	hook: "hook-token",
 	team: "team-token",
+	vercel: "vercel-token",
 };
 
 const cache = new Map<string, string>();

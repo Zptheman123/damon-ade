@@ -35,6 +35,8 @@ export interface StageRunSpec {
 	addDirs?: string[];
 	/** The workflow roles as --agents JSON. */
 	agentsJson?: string;
+	/** MCP servers for the run (the team's Vercel tools). */
+	mcpConfig?: string;
 	sessionId: string;
 	env?: NodeJS.ProcessEnv;
 	timeoutMs?: number;
@@ -113,6 +115,8 @@ export function buildStageArgs(spec: StageRunSpec): string[] {
 	}
 	if (spec.addDirs?.length) args.push("--add-dir", ...spec.addDirs);
 	if (spec.agentsJson) args.push("--agents", spec.agentsJson);
+	// Variadic too: --session-id below ends it.
+	if (spec.mcpConfig) args.push("--mcp-config", spec.mcpConfig);
 	// Last, and a single-value option: ends any variadic list above.
 	args.push("--session-id", spec.sessionId);
 	return args;

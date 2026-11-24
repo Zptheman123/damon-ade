@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { env } from "shared/env.shared";
 import { resolveClaudeExecutable } from "../agent-invoke/headless-run";
 import { findRealBinary } from "../agent-setup/utils";
 import { getSupersetHomeDir } from "../app-environment";
 import { findGitBash } from "../terminal/windows-shell";
 import { treeKillWithEscalation } from "../tree-kill";
 import { scheduleSessionRecording, transcriptPathFor } from "../usage-metrics";
+import { electronCipher } from "../vercel/electron-cipher";
+import { syncVercelMcpConfig, VERCEL_READ_TOOL_RULES } from "../vercel/mcp";
+import { teamVercelLink } from "../vercel/service";
 import { runChecks } from "./checks";
 import { TaskController } from "./controller";
 import { runAuditCommand } from "./dependency-audit";
@@ -106,6 +110,20 @@ export function getTaskController(): TaskController {
 		newId: randomUUID,
 		now: () => new Date(),
 		env: process.env,
+		// A team linked to its Vercel website: its runs can read the site,
+		// deployments and build logs (read-only tools, ADE holds the token).
+		extraTools: (project, task) => {
+			const workspaceId = task.identity.workspaceId;
+			if (!workspaceId || !teamVercelLink(homeDir, project.root)) return;
+			const mcpConfig = syncVercelMcpConfig(
+				{ homeDir, cipher: electronCipher() },
+				workspaceId,
+				env.DESKTOP_NOTIFICATIONS_PORT,
+			);
+			return mcpConfig
+				? { mcpConfig, allowedTools: VERCEL_READ_TOOL_RULES }
+				: undefined;
+		},
 		// Task runs are recorded like terminal sessions, under the project, so
 		// `bun run workflow report` includes them (the panel counts them once,
 		// from task.json).

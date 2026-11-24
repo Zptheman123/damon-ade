@@ -190,6 +190,8 @@ export function writeTeamMcpConfig(
 	homeDir: string,
 	workspaceId: string,
 	port: number,
+	/** More servers for the Coordinator (Vercel), with tools it may use freely. */
+	extra?: { servers: Record<string, unknown>; allow: string[] },
 ): string {
 	const dir = join(homeDir, "team-chat");
 	mkdirSync(dir, { recursive: true });
@@ -203,6 +205,7 @@ export function writeTeamMcpConfig(
 					Authorization: `Bearer ${getLocalToken(homeDir, "team")}`,
 				},
 			},
+			...extra?.servers,
 		},
 	};
 	writePrivate(path, config);
@@ -217,6 +220,7 @@ export function writeTeamMcpConfig(
 				// The user asked for the Coordinator to resume without a click;
 				// resume_plan itself refuses what only the user can settle.
 				`mcp__${TEAM_MCP_NAME}__resume_plan`,
+				...(extra?.allow ?? []),
 			],
 			deny: ["Edit", "Write", "NotebookEdit"],
 		},

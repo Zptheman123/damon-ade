@@ -81,6 +81,7 @@ export const CLAUDE_SUBCOMMANDS = [
  */
 export function buildClaudeExecLine(settingsPath: string): string {
 	return `ADE_WORKFLOW_ARGS=()
+ADE_MCP_ARGS=()
 case "\${1:-}" in
   ${CLAUDE_SUBCOMMANDS.join("|")}) ;;
   *)
@@ -99,9 +100,14 @@ case "\${1:-}" in
       *" --effort "*|*" --effort="*) ;;
       *) if [ -n "\${SUPERSET_SESSION_EFFORT:-}" ]; then ADE_WORKFLOW_ARGS+=(--effort "$SUPERSET_SESSION_EFFORT"); fi ;;
     esac
+    # The team's Vercel tools, while Vercel is connected in ADE. Before
+    # --settings, which ends the --mcp-config list.
+    if [ -n "\${SUPERSET_VERCEL_MCP:-}" ] && [ -f "$SUPERSET_VERCEL_MCP" ]; then
+      ADE_MCP_ARGS+=(--mcp-config "$SUPERSET_VERCEL_MCP")
+    fi
     ;;
 esac
-exec "$REAL_BIN" --settings "${settingsPath}" "\${ADE_WORKFLOW_ARGS[@]}" "$@"`;
+exec "$REAL_BIN" "\${ADE_MCP_ARGS[@]}" --settings "${settingsPath}" "\${ADE_WORKFLOW_ARGS[@]}" "$@"`;
 }
 
 export function createClaudeWrapper(): void {

@@ -23,6 +23,7 @@ import {
 	SETTING_ITEM_ID,
 	type SettingItemId,
 } from "../../../utils/settings-search";
+import { VercelIntegration } from "../VercelIntegration";
 
 interface IntegrationsSettingsProps {
 	visibleItems?: SettingItemId[] | null;
@@ -110,6 +111,12 @@ export function IntegrationsSettings({
 		window.open(`${env.NEXT_PUBLIC_WEB_URL}${path}`, "_blank");
 	};
 
+	// Vercel is connected on this computer: no organization needed.
+	const showVercel = isItemVisible(
+		SETTING_ITEM_ID.INTEGRATIONS_VERCEL,
+		visibleItems,
+	);
+
 	if (!activeOrganizationId) {
 		return (
 			<div className="p-6 max-w-4xl w-full">
@@ -119,8 +126,13 @@ export function IntegrationsSettings({
 						Connect external services to sync data
 					</p>
 				</div>
+				{showVercel && (
+					<div className="mb-6">
+						<VercelIntegration />
+					</div>
+				)}
 				<p className="text-muted-foreground">
-					You need to be part of an organization to use integrations.
+					Linear, GitHub and Slack need you to be part of an organization.
 				</p>
 			</div>
 		);
@@ -136,6 +148,8 @@ export function IntegrationsSettings({
 			</div>
 
 			<div className="grid gap-4">
+				{showVercel && <VercelIntegration />}
+
 				{showLinear && (
 					<IntegrationCard
 						name="Linear"

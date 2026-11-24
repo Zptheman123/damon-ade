@@ -39,6 +39,16 @@ export interface ProjectConfig {
 	targets: RunTarget[];
 	/** Where previews open: a tab, or split beside the conversation. */
 	previewLayout?: "tab" | "split";
+	/** The Vercel project (website) this team is connected to. */
+	vercel?: VercelLink;
+}
+
+export interface VercelLink {
+	projectId: string;
+	projectName: string;
+	/** The Vercel team it belongs to; null: the personal account. */
+	teamId: string | null;
+	linkedAt: string;
 }
 
 const FILE = "project-config.json";

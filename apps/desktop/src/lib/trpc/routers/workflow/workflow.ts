@@ -207,6 +207,30 @@ export interface WorkflowRouterDeps {
  * workspace's own folder when the project has none (ADE agents). Same rule as
  * the terminal environment, so the panel and the terminals agree.
  */
+/** The Coordinator's Vercel tools, while Vercel is connected. */
+async function vercelForTeamChat(homeDir: string, workspaceId: string) {
+	try {
+		const { electronCipher } = await import("main/lib/vercel/electron-cipher");
+		const { isVercelConnected } = await import("main/lib/vercel/service");
+		const { VERCEL_MCP_NAME, VERCEL_READ_TOOL_RULES, vercelMcpServer } =
+			await import("main/lib/vercel/mcp");
+		if (!isVercelConnected({ homeDir, cipher: electronCipher() })) return;
+		return {
+			servers: {
+				[VERCEL_MCP_NAME]: vercelMcpServer(
+					homeDir,
+					workspaceId,
+					env.DESKTOP_NOTIFICATIONS_PORT,
+				),
+			},
+			allow: VERCEL_READ_TOOL_RULES,
+		};
+	} catch {
+		// Vercel is optional: the Team chat starts without it.
+		return undefined;
+	}
+}
+
 function resolveWorkspaceFromDb(workspaceId: string): WorkspaceContext {
 	const workspace = localDb
 		.select()
@@ -1554,6 +1578,7 @@ export const createWorkflowRouter = (
 					deps.homeDir(),
 					input.workspaceId,
 					env.DESKTOP_NOTIFICATIONS_PORT,
+					await vercelForTeamChat(deps.homeDir(), input.workspaceId),
 				);
 				return {
 					enabled: true as const,

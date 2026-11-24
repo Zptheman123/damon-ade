@@ -39,6 +39,7 @@ export const SETTING_ITEM_ID = {
 	INTEGRATIONS_LINEAR: "integrations-linear",
 	INTEGRATIONS_GITHUB: "integrations-github",
 	INTEGRATIONS_SLACK: "integrations-slack",
+	INTEGRATIONS_VERCEL: "integrations-vercel",
 
 	BILLING_OVERVIEW: "billing-overview",
 	BILLING_PLANS: "billing-plans",
@@ -591,6 +592,25 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 			"cmd",
 			"ctrl",
 			"browser",
+		],
+	},
+	{
+		id: SETTING_ITEM_ID.INTEGRATIONS_VERCEL,
+		section: "integrations",
+		title: "Vercel",
+		description:
+			"Connect Vercel so ADE and its agents can see your websites, deployments and build logs",
+		keywords: [
+			"integrations",
+			"vercel",
+			"deploy",
+			"deployments",
+			"website",
+			"hosting",
+			"build logs",
+			"token",
+			"connect",
+			"connected",
 		],
 	},
 	{

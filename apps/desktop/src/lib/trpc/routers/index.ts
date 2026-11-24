@@ -30,6 +30,7 @@ import { createSpecialistsRouter } from "./specialists";
 import { createSyncRouter } from "./sync";
 import { createTerminalRouter } from "./terminal";
 import { createUiStateRouter } from "./ui-state";
+import { createVercelRouter } from "./vercel";
 import { createVoiceRouter } from "./voice";
 import { createWindowRouter } from "./window";
 import { createWorkflowRouter } from "./workflow";
@@ -48,6 +49,7 @@ export const createAppRouter = (getWindow: () => BrowserWindow | null) => {
 		attachments: createAttachmentsRouter(),
 		voice: createVoiceRouter(),
 		runTargets: createRunTargetsRouter(),
+		vercel: createVercelRouter(),
 		workspaces: createWorkspacesRouter(),
 		terminal: createTerminalRouter(),
 		changes: createChangesRouter(),

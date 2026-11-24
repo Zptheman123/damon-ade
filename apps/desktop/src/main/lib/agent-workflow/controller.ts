@@ -1527,6 +1527,14 @@ export interface ControllerDeps {
 	) => void;
 	/** How often live progress is written to task.json (ms). */
 	progressSaveIntervalMs?: number;
+	/**
+	 * Tools a run gets beyond Claude Code's own (the team's Vercel tools):
+	 * an MCP config and the read-only tools allowed without asking.
+	 */
+	extraTools?: (
+		project: ProjectWorkflow,
+		task: TaskRecord,
+	) => { mcpConfig: string; allowedTools: string[] } | undefined;
 	/** Probes of the worktree (default: git); injectable for tests. */
 	branchOf?: (worktree: string) => string | undefined;
 	codeStateOf?: (worktree: string) => string | undefined;
@@ -2413,6 +2421,14 @@ export class TaskController {
 				? READ_ONLY_GIT
 				: []),
 		];
+		let extra: ReturnType<NonNullable<ControllerDeps["extraTools"]>>;
+		try {
+			extra = this.deps.extraTools?.(project, task);
+		} catch {
+			// Extra tools are a help, never a reason not to run.
+			extra = undefined;
+		}
+		if (extra) allowedTools.push(...extra.allowedTools);
 		const disallowedTools = readOnly
 			? ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 			: kind === "plan"
@@ -2574,6 +2590,7 @@ export class TaskController {
 							: []),
 					],
 					agentsJson,
+					mcpConfig: extra?.mcpConfig,
 					sessionId: run.sessionId as string,
 					env: this.deps.env,
 				},
