@@ -30,6 +30,7 @@ import { RunSheet } from "./components/RunSheet";
 import { SpecialistsSheet } from "./components/SpecialistsSheet";
 import { TasksSheet } from "./components/TasksSheet";
 import { TeamChatSheet } from "./components/TeamChatSheet";
+import { TeamControls } from "./components/TeamControls";
 import { useAttention } from "./hooks/useAttention";
 import { useRunTargets } from "./hooks/useRunTargets";
 import { useTeamChatTab } from "./hooks/useTeamChatTab";
@@ -265,6 +266,12 @@ export function ModelBar() {
 						Every team plan and how far it got; you can also plan one here
 					</TooltipContent>
 				</Tooltip>
+				{ready && (
+					<>
+						<div className="mx-1 h-4 w-px bg-border" aria-hidden />
+						<TeamControls workspaceId={workspaceId} />
+					</>
+				)}
 				{teamChat.available && (
 					<Tooltip>
 						<TooltipTrigger asChild>

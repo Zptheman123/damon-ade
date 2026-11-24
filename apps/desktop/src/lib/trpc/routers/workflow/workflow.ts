@@ -620,6 +620,12 @@ export const createWorkflowRouter = (
 	const branchOf = deps.branchOf ?? currentBranch;
 	const codeStateOf = deps.codeStateOf ?? codeState;
 
+	/** This workspace and its team's agents (each agent is a workspace). */
+	function teamWorkspaceIds(workspaceId: string): string[] {
+		const agents = deps.listAgents?.(workspaceId) ?? [];
+		return [...new Set([workspaceId, ...agents.map((a) => a.workspaceId)])];
+	}
+
 	/** The task, after checking it may be acted on from this workspace. */
 	function taskFor(
 		workspaceId: string,
@@ -1310,6 +1316,36 @@ export const createWorkflowRouter = (
 						}
 					}
 					return { resumed, still };
+				}),
+			),
+
+		/**
+		 * Wrap up: every working task of the team finishes its current step
+		 * and pauses. Also returns the team's workspaces, so the app can ask
+		 * the Claude sessions open in them to wrap up too.
+		 */
+		wrapUpAll: publicProcedure
+			.input(z.object({ workspaceId: z.string() }))
+			.mutation(({ input }) =>
+				guarded(async () => {
+					const ctx = deps.resolveWorkspace(input.workspaceId);
+					const tasks = await deps.controller().wrapUpAll(ctx.project);
+					return { tasks, workspaceIds: teamWorkspaceIds(input.workspaceId) };
+				}),
+			),
+
+		/**
+		 * Stop everything now: every run of the team is killed and every
+		 * unfinished task pauses; Resume continues them. Also returns the
+		 * team's workspaces, so the app can interrupt their Claude sessions.
+		 */
+		stopAll: publicProcedure
+			.input(z.object({ workspaceId: z.string() }))
+			.mutation(({ input }) =>
+				guarded(async () => {
+					const ctx = deps.resolveWorkspace(input.workspaceId);
+					const tasks = await deps.controller().stopAll(ctx.project);
+					return { tasks, workspaceIds: teamWorkspaceIds(input.workspaceId) };
 				}),
 			),
 

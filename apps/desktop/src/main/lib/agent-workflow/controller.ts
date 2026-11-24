@@ -365,6 +365,10 @@ function turnLimitNote(task: TaskRecord, kind: RunKind): string {
  */
 const CONTINUES_ALONE =
 	/hit its turn limit|^The \w+ run failed:|^ADE stopped while this ran/;
+/** Why a task waits after Stop all. */
+export const STOPPED_BY_YOU =
+	"Stopped by you. Its work so far is kept; Resume continues from here.";
+
 /** Automatic resumes per subtask before the user decides. */
 const MAX_AUTO_RESUMES = 3;
 
@@ -1765,7 +1769,13 @@ export class TaskController {
 		const timer = setTimeout(() => {
 			this.resumeTimers.delete(timer);
 			const task = getTask(project, slug);
-			if (!task || task.state !== "paused" || activeRun(task)) return;
+			if (
+				!task ||
+				task.state !== "paused" ||
+				task.pauseRequested ||
+				activeRun(task)
+			)
+				return;
 			this.track(
 				project,
 				slug,
@@ -1943,6 +1953,79 @@ export class TaskController {
 			this.changed(project, slug);
 			return task;
 		});
+	}
+
+	/** Tasks of the project that are working or waiting to (top level). */
+	private busyTasks(project: ProjectWorkflow): TaskRecord[] {
+		return listTaskRecords(project).filter(
+			(t) =>
+				!t.parentSlug &&
+				t.state !== "done" &&
+				t.state !== "cancelled" &&
+				(t.state === "running" || !!activeRun(t) || !!t.waitingForFolder),
+		);
+	}
+
+	/**
+	 * Wrap up: every task of the project that is working finishes the step
+	 * it is on (its work is kept in its folder and its record), then
+	 * pauses. Resume continues each one. Returns how many were told.
+	 */
+	async wrapUpAll(project: ProjectWorkflow): Promise<number> {
+		const busy = this.busyTasks(project);
+		for (const task of busy) await this.pause(project, task.slug);
+		return busy.length;
+	}
+
+	/**
+	 * Stop everything now: every run of the project is killed (with its
+	 * child processes) and every unfinished task pauses, so nothing starts
+	 * or resumes by itself. What the runs wrote stays in their folders;
+	 * Resume continues each task. Returns how many were working.
+	 */
+	async stopAll(project: ProjectWorkflow): Promise<number> {
+		const busy = this.busyTasks(project).length;
+		const unfinished = listTaskRecords(project).filter(
+			(t) => t.state !== "done" && t.state !== "cancelled",
+		);
+		const stopped = new Set<string>();
+		for (const { slug } of unfinished) {
+			await withTaskLock(project, slug, () => {
+				const task = getTask(project, slug);
+				if (!task || task.state === "done" || task.state === "cancelled")
+					return;
+				// Nothing continues by itself: not a queue, a timer or a request.
+				task.pauseRequested = true;
+				if (
+					task.state === "running" ||
+					activeRun(task) ||
+					task.waitingForFolder
+				) {
+					task.state = "paused";
+					task.stateReason = STOPPED_BY_YOU;
+					stopped.add(slug);
+				}
+				task.waitingForFolder = undefined;
+				saveTask(project, task);
+			});
+		}
+		const live = [...this.live.values()].filter(
+			(l) => l.project.key === project.key,
+		);
+		await Promise.all(live.map((l) => l.cancel().catch(() => undefined)));
+		await this.idle(project);
+		// A run that ended as it was killed may have written "Paused.".
+		for (const slug of stopped) {
+			await withTaskLock(project, slug, () => {
+				const task = getTask(project, slug);
+				if (task?.state === "paused" && task.stateReason === "Paused.") {
+					task.stateReason = STOPPED_BY_YOU;
+					saveTask(project, task);
+				}
+			});
+			this.deps.onChange?.(project, slug);
+		}
+		return busy;
 	}
 
 	/** Stop the current run (and its child processes) and cancel the task. */
@@ -3236,8 +3319,11 @@ ${(run.summary ?? "").trim()}
 		}
 		// Resume by itself: a subtask that ran out of turns, kept failing or
 		// was cut off by a restart continues without the user, once per stop.
+		// Paused or stopped by the user: nothing new starts or resumes.
+		const held = !options.resumeChild && !!request.pauseRequested;
 		if (
 			!options.resumeChild &&
+			!held &&
 			(this.deps.loadSettings().execution.autoResume ?? true)
 		) {
 			for (const child of children) {
@@ -3281,7 +3367,7 @@ ${(run.summary ?? "").trim()}
 
 		const busy = new Set(active.map((c) => folderKey(c.identity.worktreePath)));
 		for (const child of children) {
-			if (child.state !== "idle") continue;
+			if (held || child.state !== "idle") continue;
 			const dependencies = (child.dependsOn ?? [])
 				.map((slug) => children.find((c) => c.slug === slug))
 				.filter((c): c is TaskRecord => !!c);
@@ -3346,7 +3432,9 @@ ${(run.summary ?? "").trim()}
 			request.state = "paused";
 			request.stateReason = first
 				? `Subtask "${first.title}" ${first.state === "needs-input" ? "needs your answer" : `stopped: ${first.stateReason ?? first.state}`}. Open it below; Resume continues the request.`
-				: "Waiting for a subtask it depends on.";
+				: held
+					? "Paused."
+					: "Waiting for a subtask it depends on.";
 		}
 		saveTask(project, request);
 		this.changed(project, request.slug);

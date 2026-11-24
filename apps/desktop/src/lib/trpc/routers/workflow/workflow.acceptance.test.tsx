@@ -654,6 +654,61 @@ describe.if(bash !== null && git !== null)("Auto mode, end to end", () => {
 		expect(await m.fake.waitFor(() => !m.fake.isAlive(child), 5000)).toBe(true);
 	}, 30_000);
 
+	it("Stop all stops every run now; Wrap up lets the step finish; Resume continues both", async () => {
+		const repo = makeRepo("stopall");
+		addWorkspace("ws-stopall", repo);
+		await caller.setChecks({ workspaceId: "ws-stopall", commands: [] });
+		rmSync(fake.childPidFile, { force: true });
+		fake.setSteps([{ name: "hang", hang: true }]);
+		const created = await caller.createTask({
+			workspaceId: "ws-stopall",
+			description: "Add a discount field to the cart total",
+		});
+		expect(await m.fake.waitFor(() => existsSync(fake.childPidFile))).toBe(
+			true,
+		);
+		const child = Number(readFileSync(fake.childPidFile, "utf8"));
+
+		// Stop all: killed at once, paused (not cancelled), nothing restarts.
+		const stopped = await caller.stopAll({ workspaceId: "ws-stopall" });
+		expect(stopped.tasks).toBe(1);
+		expect(stopped.workspaceIds).toContain("ws-stopall");
+		expect(await m.fake.waitFor(() => !m.fake.isAlive(child), 5000)).toBe(true);
+		await settle();
+		let task = await taskOf("ws-stopall", created.slug);
+		expect(task.state).toBe("paused");
+		expect(task.stateReason).toContain("Stopped by you");
+		expect(task.runs.at(-1)?.status).toBe("cancelled");
+		expect((await caller.stopAll({ workspaceId: "ws-stopall" })).tasks).toBe(0);
+
+		// Resume, then Wrap up: the step that is running finishes, nothing after it.
+		fake.setSteps([
+			{
+				name: "work",
+				write: { "src/cart.js": "export const discount = 1;\n" },
+			},
+			{ name: "review", text: "VERDICT: PASS" },
+			{ name: "spare", text: "VERDICT: PASS" },
+		]);
+		const before = fake.calls().length;
+		await caller.resume({ workspaceId: "ws-stopall", slug: created.slug });
+		const wrapped = await caller.wrapUpAll({ workspaceId: "ws-stopall" });
+		expect(wrapped.tasks).toBe(1);
+		await settle();
+		task = await taskOf("ws-stopall", created.slug);
+		expect(fake.calls().length - before).toBe(1);
+		expect(task.state).toBe("paused");
+		expect(task.runs.at(-1)?.status).toBe("succeeded");
+		expect(readFileSync(join(repo, "src/cart.js"), "utf8")).toContain(
+			"discount",
+		);
+
+		// Resume continues to the end.
+		await caller.resume({ workspaceId: "ws-stopall", slug: created.slug });
+		await settle();
+		expect((await taskOf("ws-stopall", created.slug)).state).toBe("done");
+	}, 60_000);
+
 	it("handles concurrent clicks and duplicate or stale completions once", async () => {
 		const repo = makeRepo("dupes");
 		addWorkspace("ws-dupes", repo);
