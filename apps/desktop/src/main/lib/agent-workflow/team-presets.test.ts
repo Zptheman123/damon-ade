@@ -11,14 +11,23 @@ describe("team presets", () => {
 			expect(preset.templates.every((id) => ids.has(id))).toBe(true);
 			expect(new Set(preset.templates).size).toBe(preset.templates.length);
 		}
+		// Full teams: a range of specialties for every kind of project.
 		expect(findTeamPreset("web-app")?.templates).toEqual([
 			"frontend",
+			"ui",
+			"ux",
 			"backend",
+			"api",
+			"database",
+			"qa",
+			"security",
+			"devops",
+			"performance",
+			"documentation",
 			"research",
 		]);
-		// Small teams: agents own whole features (never a dozen specialists).
 		for (const preset of TEAM_PRESETS) {
-			expect(preset.templates.length).toBeLessThanOrEqual(3);
+			expect(preset.templates.length).toBeGreaterThanOrEqual(5);
 		}
 		// Every preset brings a Research Agent.
 		for (const preset of TEAM_PRESETS) {
@@ -40,7 +49,16 @@ describe("team presets", () => {
 			steps.map((s) => [s.agentName, s.agentWorkspaceId, s.specialist]),
 		).toEqual([
 			["Frontend Agent", undefined, "create"],
+			["UI Agent", undefined, "create"],
+			["UX Agent", undefined, "create"],
 			["Backend Agent", undefined, "create"],
+			["API Agent", undefined, "create"],
+			["Database Agent", undefined, "create"],
+			["QA and testing Agent", undefined, "create"],
+			["Security Agent", undefined, "create"],
+			["DevOps Agent", undefined, "create"],
+			["Performance Agent", undefined, "create"],
+			["Documentation Agent", undefined, "create"],
 			["Research Agent", undefined, "create"],
 		]);
 	});
@@ -67,10 +85,13 @@ describe("team presets", () => {
 				s.specialist,
 				s.specialistId,
 			]),
-		).toEqual([
-			["Frontend Agent", "fe", "keep", "s1"],
-			["Backend Agent", "be", "assign", "s2"],
-			["Research Agent", undefined, "create", undefined],
-		]);
+		).toEqual(
+			expect.arrayContaining([
+				["Frontend Agent", "fe", "keep", "s1"],
+				["Backend Agent", "be", "assign", "s2"],
+				["Research Agent", undefined, "create", undefined],
+			]),
+		);
+		expect(steps.filter((s) => s.specialist === "create")).toHaveLength(10);
 	});
 });

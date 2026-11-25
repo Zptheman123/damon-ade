@@ -15,45 +15,109 @@ export interface TeamPreset {
 }
 
 export const TEAM_PRESETS: TeamPreset[] = [
-	// Small on purpose: each agent owns whole features end to end. A team of
-	// specialists per layer spent most of its money on hand-offs and reviews
-	// (measured on a real app); add agents only for truly parallel work.
+	// Full teams: an agent per specialty, each in its own folder and branch,
+	// so independent pieces of a long plan run side by side. The Team chat
+	// gives each subtask to the specialist that fits and still keeps a
+	// feature with one owner end to end (hand-offs between layers cost more
+	// than they save), so a big team costs nothing while its agents are idle.
 	{
 		id: "web-app",
 		name: "Web app",
 		description:
-			"A frontend and a backend builder, each owning whole features, plus research.",
-		templates: ["frontend", "backend", "research"],
+			"Frontend, UI, UX, backend, API, database, QA, security, DevOps, performance, docs and research.",
+		templates: [
+			"frontend",
+			"ui",
+			"ux",
+			"backend",
+			"api",
+			"database",
+			"qa",
+			"security",
+			"devops",
+			"performance",
+			"documentation",
+			"research",
+		],
 	},
 	{
 		id: "game-dev",
 		name: "Game development",
-		description: "One game builder for whole features, plus research.",
-		templates: ["gamedev", "research"],
+		description:
+			"Game builder, UI, UX, backend, performance, QA, DevOps, docs and research.",
+		templates: [
+			"gamedev",
+			"ui",
+			"ux",
+			"backend",
+			"performance",
+			"qa",
+			"devops",
+			"documentation",
+			"research",
+		],
 	},
 	{
 		id: "mobile-app",
 		name: "Mobile app",
-		description: "The app builder and the backend behind it, plus research.",
-		templates: ["mobile", "backend", "research"],
+		description:
+			"Mobile builder, UI, UX, backend, API, database, QA, security, performance, DevOps and research.",
+		templates: [
+			"mobile",
+			"ui",
+			"ux",
+			"backend",
+			"api",
+			"database",
+			"qa",
+			"security",
+			"performance",
+			"devops",
+			"research",
+		],
 	},
 	{
 		id: "desktop-app",
 		name: "Desktop app",
-		description: "One desktop app builder for whole features, plus research.",
-		templates: ["desktop", "research"],
+		description:
+			"Desktop builder, frontend, UI, UX, backend, database, QA, security, performance, DevOps, docs and research.",
+		templates: [
+			"desktop",
+			"frontend",
+			"ui",
+			"ux",
+			"backend",
+			"database",
+			"qa",
+			"security",
+			"performance",
+			"devops",
+			"documentation",
+			"research",
+		],
 	},
 	{
 		id: "backend-service",
 		name: "Backend / API service",
-		description: "One backend builder for whole features, plus research.",
-		templates: ["backend", "research"],
+		description:
+			"Backend, API, database, security, performance, QA, DevOps, docs and research.",
+		templates: [
+			"backend",
+			"api",
+			"database",
+			"security",
+			"performance",
+			"qa",
+			"devops",
+			"documentation",
+			"research",
+		],
 	},
 	{
 		id: "minimal",
-		name: "Solo builder",
-		description: "One builder for everything, plus research.",
-		templates: ["frontend", "research"],
+		name: "Small team",
+		description: "Frontend, backend, UI, QA and research.",
+		templates: ["frontend", "backend", "ui", "qa", "research"],
 	},
 ];
 
