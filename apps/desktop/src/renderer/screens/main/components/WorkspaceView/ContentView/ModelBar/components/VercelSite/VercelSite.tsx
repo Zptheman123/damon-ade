@@ -107,7 +107,9 @@ export function VercelSite({ workspaceId }: { workspaceId: string }) {
 						setOpen(false);
 						void navigate({ to: "/settings/integrations" });
 					}}
-					onLink={(projectId) => link.mutate({ workspaceId, projectId })}
+					onLink={(vercelProjectId) =>
+						link.mutate({ workspaceId, vercelProjectId })
+					}
 					onUnlink={() => unlink.mutate({ workspaceId })}
 					onOpen={(url) => openUrl.mutate(url)}
 					onOpenInPane={(url) => {

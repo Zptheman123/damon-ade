@@ -10,6 +10,7 @@ import { scheduleSessionRecording, transcriptPathFor } from "../usage-metrics";
 import { recordPlanLimits } from "../usage-metrics/plan-limits";
 import { electronCipher } from "../vercel/electron-cipher";
 import { syncVercelMcpConfig, VERCEL_READ_TOOL_RULES } from "../vercel/mcp";
+import { writeVercelProjectFile } from "../vercel/project-file";
 import { teamVercelLink } from "../vercel/service";
 import { runChecks } from "./checks";
 import { TaskController } from "./controller";
@@ -127,7 +128,14 @@ export function getTaskController(): TaskController {
 		// deployments and build logs (read-only tools, ADE holds the token).
 		extraTools: (project, task) => {
 			const workspaceId = task.identity.workspaceId;
-			if (!workspaceId || !teamVercelLink(homeDir, project.root)) return;
+			const link = teamVercelLink(homeDir, project.root);
+			if (!workspaceId || !link) return;
+			// The agent's folder deploys to the team's project, never one it picks.
+			try {
+				writeVercelProjectFile(task.identity.worktreePath, link);
+			} catch {
+				// Best effort: the tools still name the project.
+			}
 			const mcpConfig = syncVercelMcpConfig(
 				{ homeDir, cipher: electronCipher() },
 				workspaceId,

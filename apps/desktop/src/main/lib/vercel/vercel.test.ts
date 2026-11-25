@@ -22,7 +22,11 @@ import {
 	syncVercelMcpConfig,
 	VERCEL_READ_TOOL_RULES,
 } from "./mcp";
-import { linkTeamToVercel, teamSite } from "./service";
+import {
+	removeVercelProjectFile,
+	writeVercelProjectFile,
+} from "./project-file";
+import { allVercelProjects, linkTeamToVercel, teamSite } from "./service";
 import { suggestVercelProject } from "./suggest";
 
 /**
@@ -91,8 +95,16 @@ function fakeVercel() {
 		switch (url.pathname) {
 			case "/v2/user":
 				return json({ user: { id: "u1", username: "zane", name: "Zane" } });
+			case "/v2/teams":
+				return json({
+					teams: [{ id: "team_acme", slug: "acme", name: "Acme" }],
+				});
 			case "/v10/projects":
-				return json({ projects: [PROJECT, { id: "prj_other", name: "blog" }] });
+				return json({
+					projects: url.searchParams.get("teamId")
+						? [{ id: "prj_shop", name: "shop" }]
+						: [PROJECT, { id: "prj_other", name: "blog" }],
+				});
 			case "/v10/projects/prj_cal":
 			case "/v10/projects/calendar-site":
 				return json(PROJECT);
@@ -206,6 +218,8 @@ describe("Vercel", () => {
 			projectId: "prj_cal",
 			projectName: "calendar-site",
 			teamId: null,
+			// The personal account: the CLI names it by the user's id.
+			orgId: "u1",
 		});
 		const site = await teamSite(deps, root);
 		expect(site.project?.productionUrl).toBe("https://calendar.example.com");
@@ -227,7 +241,7 @@ describe("Vercel", () => {
 
 		const notLinked = await callTool(handler, "vercel_site");
 		expect(notLinked.isError).toBe(true);
-		expect(notLinked.text).toContain("not linked");
+		expect(notLinked.text).toContain("Team Settings");
 
 		await linkTeamToVercel(deps, root, "prj_cal");
 		const site = await callTool(handler, "vercel_site");
@@ -255,14 +269,88 @@ describe("Vercel", () => {
 			method: "tools/list",
 		})) as { result: { tools: Array<{ name: string }> } };
 		const names = list.result.tools.map((t) => t.name);
-		expect(names).toContain("vercel_link_project");
+		// The team's project is the user's choice: no tool lists or links projects.
+		expect(names).not.toContain("vercel_link_project");
+		expect(names).not.toContain("vercel_projects");
 		expect(names.some((n) => /deploy$|redeploy|delete|set_env/.test(n))).toBe(
 			false,
 		);
-		// Linking changes the team: never allowed without asking.
-		expect(VERCEL_READ_TOOL_RULES).not.toContain(
-			"mcp__ade-vercel__vercel_link_project",
+		expect(VERCEL_READ_TOOL_RULES).toHaveLength(names.length);
+
+		// The agents are told which project, by name.
+		const init = (await handler("ws-1", {
+			jsonrpc: "2.0",
+			id: 3,
+			method: "initialize",
+			params: { protocolVersion: "2025-06-18" },
+		})) as { result: { instructions: string } };
+		expect(init.result.instructions).toContain(
+			`This team's Vercel project is "calendar-site"`,
 		);
+		expect(init.result.instructions).toContain("never choose, link or create");
+	});
+
+	it("lists every scope's projects and links one from a Vercel team", async () => {
+		const { homeDir, root, deps, calls } = setup("scopes");
+		connect(homeDir);
+		const scopes = await allVercelProjects(deps);
+		expect(
+			scopes.map((s) => [s.scopeName, s.projects.map((p) => p.name)]),
+		).toEqual([
+			["Personal account", ["calendar-site", "blog"]],
+			["Acme", ["shop"]],
+		]);
+		const link = await linkTeamToVercel(deps, root, "prj_cal", {
+			teamId: "team_acme",
+			teamName: "Acme",
+		});
+		expect(link).toMatchObject({
+			teamId: "team_acme",
+			teamName: "Acme",
+			orgId: "team_acme",
+		});
+		expect(calls.find((c) => c.path === "/v10/projects/prj_cal")?.teamId).toBe(
+			"team_acme",
+		);
+	});
+
+	it("points a folder's Vercel CLI at the team's project, and nothing else", () => {
+		const folder = join(tmp, "cli-folder");
+		mkdirSync(join(folder, ".vercel"), { recursive: true });
+		const file = join(folder, ".vercel", "project.json");
+		writeFileSync(
+			file,
+			JSON.stringify({ projectId: "prj_old", orgId: "u1", settings: { a: 1 } }),
+		);
+		const link = {
+			projectId: "prj_cal",
+			projectName: "calendar-site",
+			teamId: null,
+			orgId: "u1",
+			linkedAt: "",
+		};
+		expect(writeVercelProjectFile(folder, link)).toBe(true);
+		expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
+			projectId: "prj_cal",
+			orgId: "u1",
+			projectName: "calendar-site",
+			settings: { a: 1 },
+		});
+		// The folder ignores itself, so it never reaches a commit.
+		expect(readFileSync(join(folder, ".vercel", ".gitignore"), "utf8")).toBe(
+			"*\n",
+		);
+		expect(writeVercelProjectFile(folder, link)).toBe(false);
+		// No owner known yet, or no folder: nothing is written.
+		expect(writeVercelProjectFile(folder, { ...link, orgId: undefined })).toBe(
+			false,
+		);
+		expect(writeVercelProjectFile(join(tmp, "missing"), link)).toBe(false);
+		// Unlinking removes only the project it wrote.
+		removeVercelProjectFile(folder, "prj_other");
+		expect(existsSync(file)).toBe(true);
+		removeVercelProjectFile(folder, "prj_cal");
+		expect(existsSync(file)).toBe(false);
 	});
 
 	it("a bad token is reported, not crashed on", async () => {

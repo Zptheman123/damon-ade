@@ -1,7 +1,9 @@
-import { workspaces } from "@superset/local-db";
+import { projects, workspaces, worktrees } from "@superset/local-db";
 import { TRPCError } from "@trpc/server";
+import { eq } from "drizzle-orm";
 import { getSupersetHomeDir } from "main/lib/app-environment";
 import { localDb } from "main/lib/local-db";
+import { loadProjectConfig } from "main/lib/project-type/config";
 import { VercelApi } from "main/lib/vercel/api";
 import {
 	clearVercelConnection,
@@ -16,6 +18,11 @@ import {
 	type VercelMcpDeps,
 } from "main/lib/vercel/mcp";
 import {
+	removeVercelProjectFile,
+	writeVercelProjectFile,
+} from "main/lib/vercel/project-file";
+import {
+	allVercelProjects,
 	linkTeamToVercel,
 	teamSite,
 	unlinkTeamFromVercel,
@@ -26,6 +33,7 @@ import { env } from "shared/env.shared";
 import { z } from "zod";
 import { publicProcedure, router } from "../..";
 import { defaultWorkflowRouterDeps } from "../workflow/workflow";
+import { getBranchWorkspace } from "../workspaces/utils/db-helpers";
 
 /**
  * Vercel: the user connects their account once (Settings > Integrations),
@@ -47,6 +55,63 @@ function rootOf(workspaceId: string): string {
 			message: (error as Error).message,
 		});
 	}
+}
+
+/** A team, by one of its workspaces (the top bar) or by its id (Team Settings). */
+const teamInput = z.object({
+	workspaceId: z.string().optional(),
+	projectId: z.string().optional(),
+});
+
+function teamOf(input: { workspaceId?: string; projectId?: string }) {
+	let workspaceId = input.workspaceId;
+	let projectId = input.projectId;
+	if (!workspaceId && !projectId) {
+		throw new TRPCError({ code: "BAD_REQUEST", message: "Which team?" });
+	}
+	if (!workspaceId && projectId) {
+		workspaceId = getBranchWorkspace(projectId)?.id;
+		if (!workspaceId) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message:
+					"This team has no repository yet. Choose its repository first.",
+			});
+		}
+	}
+	if (!projectId && workspaceId) {
+		projectId = localDb
+			.select({ projectId: workspaces.projectId })
+			.from(workspaces)
+			.where(eq(workspaces.id, workspaceId))
+			.get()?.projectId;
+	}
+	return { root: rootOf(workspaceId as string), projectId };
+}
+
+/** The team's folders: its repository and every agent's worktree. */
+function teamFolders(root: string, projectId: string | undefined): string[] {
+	const folders = new Set([root]);
+	if (projectId) {
+		try {
+			const main = localDb
+				.select({ path: projects.mainRepoPath })
+				.from(projects)
+				.where(eq(projects.id, projectId))
+				.get();
+			if (main?.path) folders.add(main.path);
+			for (const w of localDb
+				.select({ path: worktrees.path })
+				.from(worktrees)
+				.where(eq(worktrees.projectId, projectId))
+				.all()) {
+				folders.add(w.path);
+			}
+		} catch {
+			// The repository alone, then.
+		}
+	}
+	return [...folders];
 }
 
 export function defaultVercelMcpDeps(): VercelMcpDeps {
@@ -82,8 +147,6 @@ async function guarded<T>(work: () => Promise<T>): Promise<T> {
 		});
 	}
 }
-
-const workspaceInput = z.object({ workspaceId: z.string() });
 
 export const createVercelRouter = () =>
 	router({
@@ -154,27 +217,69 @@ export const createVercelRouter = () =>
 				guarded(async () => vercelApi(vercelDeps()).projects(input.search)),
 			),
 
+		/** Every project the token can reach, by scope (personal account, each team). */
+		allProjects: publicProcedure
+			.input(z.object({ search: z.string().max(100).optional() }))
+			.query(({ input }) =>
+				guarded(() => allVercelProjects(vercelDeps(), input.search)),
+			),
+
 		/** The team's website: its link, project and latest deployments. */
 		site: publicProcedure
-			.input(workspaceInput)
+			.input(teamInput)
 			.query(({ input }) =>
-				guarded(() => teamSite(vercelDeps(), rootOf(input.workspaceId))),
+				guarded(() => teamSite(vercelDeps(), teamOf(input).root)),
 			),
 
+		/**
+		 * The user links the team to its project. Every folder of the team then
+		 * deploys there (.vercel/project.json), so no agent chooses a project.
+		 */
 		link: publicProcedure
-			.input(workspaceInput.extend({ projectId: z.string().min(1).max(200) }))
+			.input(
+				teamInput.extend({
+					vercelProjectId: z.string().min(1).max(200),
+					/** The project's Vercel team (null: personal); left out: Settings' scope. */
+					teamId: z.string().nullable().optional(),
+					teamName: z.string().nullable().optional(),
+				}),
+			)
 			.mutation(({ input }) =>
-				guarded(() =>
-					linkTeamToVercel(
+				guarded(async () => {
+					const { root, projectId } = teamOf(input);
+					const link = await linkTeamToVercel(
 						vercelDeps(),
-						rootOf(input.workspaceId),
-						input.projectId,
-					),
-				),
+						root,
+						input.vercelProjectId,
+						input.teamId === undefined
+							? undefined
+							: { teamId: input.teamId, teamName: input.teamName },
+					);
+					for (const folder of teamFolders(root, projectId)) {
+						try {
+							writeVercelProjectFile(folder, link);
+						} catch {
+							// A folder that is gone or locked: its next run writes it.
+						}
+					}
+					return link;
+				}),
 			),
 
-		unlink: publicProcedure.input(workspaceInput).mutation(({ input }) => {
-			unlinkTeamFromVercel(getSupersetHomeDir(), rootOf(input.workspaceId));
+		unlink: publicProcedure.input(teamInput).mutation(({ input }) => {
+			const { root, projectId } = teamOf(input);
+			const home = getSupersetHomeDir();
+			const old = loadProjectConfig(home, root).vercel;
+			unlinkTeamFromVercel(home, root);
+			if (old) {
+				for (const folder of teamFolders(root, projectId)) {
+					try {
+						removeVercelProjectFile(folder, old.projectId);
+					} catch {
+						// Best effort.
+					}
+				}
+			}
 			return { linked: false };
 		}),
 	});

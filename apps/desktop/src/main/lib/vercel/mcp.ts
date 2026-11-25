@@ -7,11 +7,13 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { getLocalToken } from "main/lib/notifications/local-auth";
-import { loadProjectConfig } from "main/lib/project-type/config";
+import {
+	loadProjectConfig,
+	type VercelLink,
+} from "main/lib/project-type/config";
 import {
 	ago,
 	isVercelConnected,
-	linkTeamToVercel,
 	teamSite,
 	type VercelDeps,
 	vercelApi,
@@ -23,17 +25,29 @@ import {
  * makes the Vercel calls with the user's token; the agents only see the
  * answers. They can read the team's website, its deployments, build logs
  * and the names of its environment variables. They cannot deploy, change
- * settings or read secret values. Linking the team to a project is the one
- * change, and Claude Code asks the user before each such call.
+ * settings, read secret values or choose the team's project: the user
+ * links each team to its project in Team Settings.
  */
 
 export const VERCEL_MCP_NAME = "ade-vercel";
 
-const INSTRUCTIONS = `Vercel tools for this ADE team's website (the user connected their Vercel account in ADE).
+const NOT_LINKED =
+	"This team has no Vercel project yet. Only the user chooses it, in ADE: Team Settings > Vercel (or the Vercel button in the top bar). Do not pick, link or create a project, and do not deploy, until they have.";
+
+/** The server's instructions: the team's project by name, or how it gets one. */
+export function vercelInstructions(
+	link: VercelLink | null | undefined,
+): string {
+	const scope = link?.teamName ? ` (Vercel team ${link.teamName})` : "";
+	const project = link
+		? `This team's Vercel project is "${link.projectName}"${scope}, chosen by the user in Team Settings. Everything this team deploys goes to that project and no other: never choose, link or create a different one (no \`vercel link\`, no --project, --scope or --token for another one). The folder's .vercel/project.json already points at it, so the Vercel CLI and plugin use it without asking.`
+		: NOT_LINKED;
+	return `Vercel tools for this ADE team's website (the user connected their Vercel account in ADE).
+- ${project}
 - vercel_site shows the live site, its address and its latest deployments. Use it when the work concerns the deployed website, or when the user asks whether it is live.
-- When a deployment failed, read vercel_build_logs, find the cause in the code and fix it there. A new deployment starts when the fix is pushed to the project's Git repository; you cannot deploy from here.
-- vercel_env_names lists environment variable names (never their values), to check that a variable the code needs exists in production.
-- If the team is not linked to a project yet, vercel_projects lists the user's projects; ask the user which one before calling vercel_link_project.`;
+- When a deployment failed, read vercel_build_logs, find the cause in the code and fix it there. A new deployment starts when the fix is pushed to the project's Git repository.
+- vercel_env_names lists environment variable names (never their values), to check that a variable the code needs exists in production.`;
+}
 
 const READ_TOOLS = [
 	{
@@ -77,35 +91,13 @@ const READ_TOOLS = [
 			"The names of the project's environment variables and where each applies (production, preview, development). Never their values.",
 		inputSchema: { type: "object", properties: {} },
 	},
-	{
-		name: "vercel_projects",
-		description: "The user's Vercel projects, to find the team's website.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				search: { type: "string", description: "Part of the name." },
-			},
-		},
-	},
 ] as const;
 
-const TOOLS = [
-	...READ_TOOLS,
-	{
-		name: "vercel_link_project",
-		description:
-			"Connect this ADE team to one of the user's Vercel projects (its website). Only after the user chose the project.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				project: { type: "string", description: "The project's name or id." },
-			},
-			required: ["project"],
-		},
-	},
-];
+// No tool lists the user's other projects or links one: the team's project
+// is the user's choice (Team Settings), never an agent's.
+const TOOLS = READ_TOOLS;
 
-/** Tools that only read: allowed without asking (Team chat, task runs). */
+/** Every tool only reads: allowed without asking (Team chat, task runs). */
 export const VERCEL_READ_TOOL_RULES = READ_TOOLS.map(
 	(t) => `mcp__${VERCEL_MCP_NAME}__${t.name}`,
 );
@@ -214,11 +206,20 @@ export function createVercelMcpHandler(deps: () => VercelMcpDeps) {
 		const root = d.rootOf(workspaceId);
 		const link = loadProjectConfig(d.homeDir, root).vercel;
 		if (!link) {
-			throw new Error(
-				"This team is not linked to a Vercel project yet. Call vercel_projects, ask the user which project is the team's website, then vercel_link_project. (The user can also use the Vercel button in ADE's top bar.)",
-			);
+			throw new Error(NOT_LINKED);
 		}
 		return { d, root, link, api: vercelApi(d, link.teamId) };
+	};
+
+	const instructionsFor = (workspaceId: string) => {
+		try {
+			const d = deps();
+			return vercelInstructions(
+				loadProjectConfig(d.homeDir, d.rootOf(workspaceId)).vercel,
+			);
+		} catch {
+			return vercelInstructions(null);
+		}
 	};
 
 	const call = async (
@@ -301,32 +302,6 @@ export function createVercelMcpHandler(deps: () => VercelMcpDeps) {
 						: "No environment variables.",
 				);
 			}
-			case "vercel_projects": {
-				const d = deps();
-				const search = typeof args.search === "string" ? args.search : "";
-				const projects = await vercelApi(d).projects(search);
-				return text(
-					projects.length
-						? projects
-								.slice(0, 50)
-								.map(
-									(p) =>
-										`- ${p.name} (${p.id})${p.framework ? `, ${p.framework}` : ""}${p.repo ? `, from ${p.repo}` : ""}, ${p.productionUrl}`,
-								)
-								.join("\n")
-						: "No projects found.",
-				);
-			}
-			case "vercel_link_project": {
-				const d = deps();
-				const project =
-					typeof args.project === "string" ? args.project.trim() : "";
-				if (!project) return text("Which project? Give its name or id.", true);
-				const link = await linkTeamToVercel(d, d.rootOf(workspaceId), project);
-				return text(
-					`Linked this team to the Vercel project "${link.projectName}".`,
-				);
-			}
 			default:
 				return text(`Unknown tool: ${name}`, true);
 		}
@@ -346,7 +321,7 @@ export function createVercelMcpHandler(deps: () => VercelMcpDeps) {
 							: SUPPORTED_VERSIONS[0],
 						capabilities: { tools: {} },
 						serverInfo: { name: VERCEL_MCP_NAME, version: "1.0.0" },
-						instructions: INSTRUCTIONS,
+						instructions: instructionsFor(workspaceId),
 					});
 				}
 				case "ping":

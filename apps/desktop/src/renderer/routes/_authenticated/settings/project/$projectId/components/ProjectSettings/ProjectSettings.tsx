@@ -19,6 +19,7 @@ import {
 	HiOutlinePaintBrush,
 } from "react-icons/hi2";
 import { LuImagePlus, LuTrash2 } from "react-icons/lu";
+import { SiVercel } from "react-icons/si";
 import { downscaleImageToDataUrl } from "renderer/lib/downscale-image";
 import { electronTrpc } from "renderer/lib/electron-trpc";
 import {
@@ -33,6 +34,7 @@ import {
 } from "../../../../components/WorktreeLocationPicker";
 import { BRANCH_PREFIX_MODE_LABELS_WITH_DEFAULT } from "../../../../utils/branch-prefix";
 import { ScriptsEditor } from "./components/ScriptsEditor";
+import { VercelProjectSetting } from "./components/VercelProjectSetting";
 
 const REPO_DEFAULT_BASE_BRANCH = "__repo_default__";
 
@@ -360,6 +362,14 @@ export function ProjectSettings({ projectId }: ProjectSettingsProps) {
 							})
 						}
 					/>
+				</SettingsSection>
+
+				<SettingsSection
+					icon={<SiVercel className="h-4 w-4" />}
+					title="Vercel"
+					description="The Vercel project this team deploys to. Every agent's folder points at it, so no agent has to choose."
+				>
+					<VercelProjectSetting projectId={project.id} />
 				</SettingsSection>
 
 				<div className="pt-3 border-t">

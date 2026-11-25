@@ -9,6 +9,8 @@ import { getTerminalHostClient } from "main/lib/terminal-host/client";
 import type { ListSessionsResponse } from "main/lib/terminal-host/types";
 import { electronCipher } from "main/lib/vercel/electron-cipher";
 import { syncVercelMcpConfig } from "main/lib/vercel/mcp";
+import { writeVercelProjectFile } from "main/lib/vercel/project-file";
+import { teamVercelLink } from "main/lib/vercel/service";
 import { env as sharedEnv } from "shared/env.shared";
 import { DaemonTerminalManager, getDaemonTerminalManager } from "./daemon";
 import { prewarmTerminalEnv, setWorkflowEnvResolver } from "./env";
@@ -44,6 +46,16 @@ setWorkflowEnvResolver((project) => {
 			);
 		} catch (error) {
 			console.warn("[terminal] Could not set up the Vercel tools:", error);
+		}
+	}
+	// A team linked to its Vercel project: this folder's Vercel CLI uses it.
+	const folder = project.workspacePath ?? project.rootPath;
+	if (vercelMcp && project.rootPath && folder) {
+		try {
+			const link = teamVercelLink(getSupersetHomeDir(), project.rootPath);
+			if (link) writeVercelProjectFile(folder, link);
+		} catch (error) {
+			console.warn("[terminal] Could not write the Vercel project:", error);
 		}
 	}
 	return {

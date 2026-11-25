@@ -48,6 +48,10 @@ export interface VercelLink {
 	projectName: string;
 	/** The Vercel team it belongs to; null: the personal account. */
 	teamId: string | null;
+	/** The owner as the Vercel CLI names it (.vercel/project.json): the team, or the user. */
+	orgId?: string;
+	/** Its Vercel team's name, for people (null: the personal account). */
+	teamName?: string | null;
 	linkedAt: string;
 }
 
