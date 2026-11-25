@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
 	chmodSync,
@@ -21,7 +22,11 @@ import {
 	taskSpend,
 	withTaskLock,
 } from "main/lib/agent-workflow";
-import { parseSplit } from "main/lib/agent-workflow/split";
+import { planEta } from "main/lib/agent-workflow/plan-eta";
+import {
+	MAX_TEAM_CHAT_SUBTASKS,
+	parseSplit,
+} from "main/lib/agent-workflow/split";
 import { PLANNING_PRINCIPLES } from "main/lib/agent-workflow/stage-prompts";
 import { getLocalToken } from "main/lib/notifications/local-auth";
 import { transcriptPathFor } from "main/lib/usage-metrics/transcript";
@@ -41,17 +46,61 @@ import { defaultWorkflowRouterDeps, type WorkflowRouterDeps } from "./workflow";
 export const TEAM_MCP_NAME = "ade-team";
 export const TEAM_CHAT_TAB = "Team chat";
 
-const INSTRUCTIONS = `You are the Coordinator of this ADE team. The user talks with you here to plan work; the team's agents do it after the user says go.
+const INSTRUCTIONS = `You are the Coordinator of this ADE team. The user tells you here what they want; the team's agents build it after the user says go. Your job: understand exactly what the user envisions, plan it, then make sure the agents deliver that vision, reviewing every piece and asking for specific revisions until it matches, without the user having to come back.
 
+Discern the vision first:
 - At the start of a conversation call team_overview once, to learn the team's specialists and which agent does each.
-- Talk in short, plain sentences. Read the code only as much as you need to plan well; never edit files or build the work yourself.
-- If something important is unclear (what they want, where it belongs, a choice only they can make), ask at most two short questions before planning.
-- How to split work:
+- Talk in short, plain sentences. Read the code yourself to answer what you can; never edit files or build the work yourself.
+- Find out what the user pictures: who it is for, the features and flows that must work, the look and feel (style, references, colours, layout, tone), the platforms, what "done" looks like, and what to leave out. Ask only what only they know: at most three focused questions per message, offering concrete options where that helps. Notice what they imply, not just what they say.
+- Then write a vision brief: concrete and testable (goals; each feature with how to tell it works; look and feel; constraints; out of scope). Show it and ask them to confirm or correct it. Every agent receives this brief, and you judge their work against it, so make it precise.
+- Ask how long they want it to run unattended (for example 4 hours) if they have not said.
+
+Plan:
 ${PLANNING_PRINCIPLES}
-- Propose a plan as a numbered list. For each subtask: a short title, what to change and how to know it is done, the specialist (by name, or "none"), the route ("quick", "implement", "plan" or "exceptional"), the model per role, and which earlier subtasks it waits for. Independent subtasks run at the same time on their agents. Revise the plan whenever the user asks.
+- A long unattended run may use more subtasks (up to ${MAX_TEAM_CHAT_SUBTASKS}): whole features, in the order they build on each other, with a last subtask that checks the whole app end to end against the vision and fixes what falls short.
+- Propose a plan as a numbered list. For each subtask: a short title, what to build and how to know it is done (its acceptance criteria from the vision brief), the specialist (by name, or "none"), the route ("quick", "implement", "plan" or "exceptional"), the model per role, an honest estimate in minutes (including checks and review: about 10 for quick work, 20 to 40 for a normal feature, 45 to 90 for a large one), and which earlier subtasks it waits for. Independent subtasks run at the same time on their agents. Revise the plan whenever the user asks.
 - Models, as cheaply as is reliable: haiku only for trivial low-risk work, sonnet for normal work, opus for planning or reviewing difficult or risky work, fable only for exceptional architecture. Risky work (authentication, permissions, secrets, payments, data migrations, messaging people) is never "quick".
-- Only when the user clearly says to start (for example "go"), call start_plan with their request and the exact plan you agreed. Then say it has started, and use plan_status when they ask how it is going.
-- When a started plan has stopped, call resume_plan yourself instead of asking the user to click Resume, unless they said to wait. Tell them in one sentence what stopped it and that you resumed it. If resume_plan says only the user can settle something (approving a command, answering questions, raising a budget, a stop that keeps repeating), tell them exactly what to do in ADE.`;
+- Only when the user clearly says to start (for example "go"), call start_plan with their request, the confirmed vision brief, the hours they agreed to and the exact plan. Then tell them they can leave: you review each finished subtask, ask for revisions, and report when it is done; the countdown in ADE's top bar shows the time left.
+
+While it runs (the user is away: never wait for them):
+- ADE types messages starting with "[ADE]" into this chat when a subtask finishes or stops, and when the plan ends. They come from ADE, not the user. Act on each at once.
+- A finished subtask: call review_subtask and read the agent's report, the reviewer's verdict, the checks and the changes (read the changed files when the diff is not enough). Compare it with the vision brief and the subtask's acceptance criteria. If it matches, approve_subtask. If not, revise_subtask with specific, actionable instructions: what is wrong, where, and exactly what it must be instead (file, behaviour, wording, layout, colours). Never vague ("make it better"). Up to 3 revisions per subtask; after that approve it and add_subtask for what is left. A review you do not answer within 20 minutes is approved by itself, so answer promptly.
+- A stopped subtask: call resume_plan when ADE can get past the stop; when unclear instructions caused it, revise_subtask with clearer ones. Tell the user only what only they can settle.
+- Work the plan missed: add_subtask.
+- When the plan is finished: check the whole result against the vision brief, revise or add what still falls short, then give the user a short report: what was built, how to try it, and anything left.`;
+
+const SUBTASK_PROPERTIES = {
+	title: { type: "string" },
+	description: {
+		type: "string",
+		description:
+			"What to build, the interfaces it uses or provides, and its acceptance criteria (how to know it is done, from the vision brief).",
+	},
+	specialist: {
+		type: "string",
+		description: 'A specialist\'s name from team_overview, or "none".',
+	},
+	route: {
+		type: "string",
+		enum: ["quick", "implement", "plan", "exceptional"],
+	},
+	models: {
+		type: "object",
+		description:
+			'Model per role, e.g. {"planner": "opus", "implementer": "sonnet", "reviewer": "sonnet"}.',
+	},
+	minutes: {
+		type: "integer",
+		description:
+			"Estimated minutes, including checks and review (for the countdown).",
+	},
+} as const;
+
+const SUBTASK_REF = {
+	type: "string",
+	description:
+		"The subtask: its id (from plan_status), or its number in the latest plan.",
+} as const;
 
 const TOOLS = [
 	{
@@ -67,7 +116,7 @@ const TOOLS = [
 	{
 		name: "start_plan",
 		description:
-			"Start the agreed plan: ADE creates one task per subtask, on the specialist's agent, and runs them (independent ones at the same time) with checks and review. This spends money on model runs. Call it only after the user has clearly said to start.",
+			"Start the agreed plan: ADE creates one task per subtask, on the specialist's agent, and runs them (independent ones at the same time) with checks and review. Every agent gets the vision brief. Each finished subtask waits for your review (review_subtask, then approve_subtask or revise_subtask). This spends money on model runs. Call it only after the user has clearly said to start.",
 		inputSchema: {
 			type: "object",
 			required: ["request", "plan"],
@@ -75,6 +124,26 @@ const TOOLS = [
 				request: {
 					type: "string",
 					description: "What the user asked for, in one or two sentences.",
+				},
+				vision: {
+					type: "string",
+					description:
+						"The vision brief the user confirmed: goals, features with acceptance criteria, look and feel, constraints, out of scope.",
+				},
+				hours: {
+					type: "number",
+					description:
+						"The time box the user agreed to (0.5 to 8): no new work starts after it.",
+				},
+				review: {
+					type: "boolean",
+					description:
+						"Review each finished subtask before the work built on it starts (default true).",
+				},
+				budgetUsdPerSubtask: {
+					type: "number",
+					description:
+						"Only if the user agreed to it in this conversation: the most each subtask may spend, in US dollars (up to 50). Without it, ADE's setting applies.",
 				},
 				plan: {
 					type: "object",
@@ -87,31 +156,12 @@ const TOOLS = [
 						subtasks: {
 							type: "array",
 							minItems: 1,
-							maxItems: 6,
+							maxItems: MAX_TEAM_CHAT_SUBTASKS,
 							items: {
 								type: "object",
 								required: ["title", "description", "route"],
 								properties: {
-									title: { type: "string" },
-									description: {
-										type: "string",
-										description:
-											"What to change, the interfaces it uses or provides, and how to know it is done.",
-									},
-									specialist: {
-										type: "string",
-										description:
-											'A specialist\'s name from team_overview, or "none".',
-									},
-									route: {
-										type: "string",
-										enum: ["quick", "implement", "plan", "exceptional"],
-									},
-									models: {
-										type: "object",
-										description:
-											'Model per role, e.g. {"planner": "opus", "implementer": "sonnet", "reviewer": "sonnet"}.',
-									},
+									...SUBTASK_PROPERTIES,
 									dependsOn: {
 										type: "array",
 										items: { type: "integer" },
@@ -129,7 +179,7 @@ const TOOLS = [
 	{
 		name: "plan_status",
 		description:
-			"How a started plan is going: each subtask's agent, state and reason. Without an id, the latest plan. Read-only.",
+			"How a started plan is going: each subtask's id, agent, state, review and reason, and the time left. Without an id, the latest plan. Read-only.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -149,6 +199,68 @@ const TOOLS = [
 					type: "boolean",
 					description:
 						"True only when the user, in this conversation, asked to resume a plan they had paused themselves.",
+				},
+			},
+		},
+	},
+	{
+		name: "review_subtask",
+		description:
+			"What an agent did for a subtask: its final report, the reviewer's verdict, the checks, the files it changed and the diff. Read-only.",
+		inputSchema: {
+			type: "object",
+			required: ["subtask"],
+			properties: { subtask: SUBTASK_REF },
+		},
+	},
+	{
+		name: "approve_subtask",
+		description:
+			"The finished subtask matches the vision: the work built on it may start (and the plan may finish).",
+		inputSchema: {
+			type: "object",
+			required: ["subtask"],
+			properties: {
+				subtask: SUBTASK_REF,
+				note: {
+					type: "string",
+					description: "Optional: what you checked, for the record.",
+				},
+			},
+		},
+	},
+	{
+		name: "revise_subtask",
+		description:
+			"Send a subtask back to its agent with specific changes to make. The agent runs again with your instructions, then the checks and the review, and the subtask comes back to you. Up to 3 revisions per subtask. Uses model runs.",
+		inputSchema: {
+			type: "object",
+			required: ["subtask", "instructions"],
+			properties: {
+				subtask: SUBTASK_REF,
+				instructions: {
+					type: "string",
+					description:
+						"Exactly what is wrong, where, and what it must be instead (files, behaviour, wording, layout, colours).",
+				},
+			},
+		},
+	},
+	{
+		name: "add_subtask",
+		description:
+			"Add a subtask to a started plan (work it missed, or what is left after revisions). It runs on its specialist's agent once the subtasks it waits for are approved. Uses model runs.",
+		inputSchema: {
+			type: "object",
+			required: ["title", "description", "route"],
+			properties: {
+				id: { type: "string", description: "The plan id; default the latest." },
+				...SUBTASK_PROPERTIES,
+				dependsOn: {
+					type: "array",
+					items: { type: "string" },
+					description:
+						"Ids (or numbers) of subtasks in the plan whose work this one needs; [] if none.",
 				},
 			},
 		},
@@ -220,6 +332,13 @@ export function writeTeamMcpConfig(
 				// The user asked for the Coordinator to resume without a click;
 				// resume_plan itself refuses what only the user can settle.
 				`mcp__${TEAM_MCP_NAME}__resume_plan`,
+				// Reviewing and revising the agents' work while the user is
+				// away (bounded: 3 revisions per subtask, a plan of at most 12
+				// subtasks, nothing after the agreed time box).
+				`mcp__${TEAM_MCP_NAME}__review_subtask`,
+				`mcp__${TEAM_MCP_NAME}__approve_subtask`,
+				`mcp__${TEAM_MCP_NAME}__revise_subtask`,
+				`mcp__${TEAM_MCP_NAME}__add_subtask`,
 				...(extra?.allow ?? []),
 			],
 			deny: ["Edit", "Write", "NotebookEdit"],
@@ -311,15 +430,122 @@ function describePlan(request: TaskRecord, all: TaskRecord[]): string {
 	const subtasks = (request.subtaskSlugs ?? []).map((slug) =>
 		all.find((t) => t.slug === slug),
 	);
+	const reviewOf = (sub: TaskRecord) => {
+		if (!request.coordinator?.review || sub.state !== "done") return "";
+		const review = sub.review;
+		if (!review) return ", review pending";
+		if (review.state === "approved") {
+			return review.by === "coordinator"
+				? ", approved by you"
+				: ", approved by ADE (no review in time)";
+		}
+		return review.state === "waiting" ? ", WAITING FOR YOUR REVIEW" : "";
+	};
 	const lines = subtasks.map((sub, i) =>
 		sub
-			? `${i + 1}. ${sub.title} — ${sub.agentName ? `${sub.agentName}, ` : ""}${sub.state}${sub.stateReason && sub.state !== "done" ? ` (${sub.stateReason})` : ""}`
+			? `${i + 1}. ${sub.title} [id ${sub.slug}] — ${sub.agentName ? `${sub.agentName}, ` : ""}${sub.state}${reviewOf(sub)}${sub.revisions?.length ? `, revised ${sub.revisions.length}x` : ""}${sub.stateReason && sub.state !== "done" ? ` (${sub.stateReason})` : ""}`
 			: `${i + 1}. (missing)`,
 	);
+	const children = subtasks.filter((t): t is TaskRecord => !!t);
+	const eta = request.coordinator
+		? planEta(request, children, new Date())
+		: undefined;
 	return [
 		`Plan ${request.slug}: "${request.title}" — ${request.state}${request.stateReason ? `: ${request.stateReason}` : ""}`,
 		...lines,
+		...(eta && request.state !== "done" && request.state !== "cancelled"
+			? [
+					`Time left: about ${Math.round(eta.remainingMinutes)} minutes${eta.deadline ? ` (time box ends ${eta.deadline})` : ""}.`,
+				]
+			: []),
 	].join("\n");
+}
+
+/** The subtask an argument names: its id, or its number in the plan. */
+function findSubtask(
+	all: TaskRecord[],
+	plan: TaskRecord | undefined,
+	ref: unknown,
+): TaskRecord | undefined {
+	const value = String(ref ?? "").trim();
+	if (!value) return undefined;
+	if (/^\d+$/.test(value)) {
+		const slug = plan?.subtaskSlugs?.[Number(value) - 1];
+		return slug ? all.find((t) => t.slug === slug) : undefined;
+	}
+	return all.find((t) => t.slug === value && !!t.parentSlug);
+}
+
+function git(cwd: string, args: string[]): string {
+	try {
+		return execFileSync("git", ["-C", cwd, ...args], {
+			encoding: "utf8",
+			maxBuffer: 32 * 1024 * 1024,
+			timeout: 15_000,
+			windowsHide: true,
+		});
+	} catch {
+		return "";
+	}
+}
+
+const clip = (value: string, max: number) =>
+	value.length > max
+		? `${value.slice(0, max)}\n… (${value.length - max} more characters; read the files for the rest)`
+		: value;
+
+/** What an agent did for a subtask, for the Team chat's review. */
+function describeWork(sub: TaskRecord): string {
+	const runs = sub.runs.filter((r) => r.status === "succeeded");
+	const lastOf = (test: (r: (typeof runs)[number]) => boolean) =>
+		[...runs].reverse().find(test);
+	const report = lastOf((r) =>
+		["quick", "implement", "build", "fix"].includes(r.kind),
+	);
+	const review = lastOf((r) => r.kind === "review");
+	const checks = [...sub.runs]
+		.reverse()
+		.find((r) => r.kind === "checks" && !r.baseline);
+	const cwd = sub.identity.worktreePath;
+	const base = sub.identity.baselineHead;
+	const stat = base ? git(cwd, ["diff", "--stat", base]).trim() : "";
+	const diff = base ? git(cwd, ["diff", base]) : "";
+	const untracked = git(cwd, ["ls-files", "--others", "--exclude-standard"])
+		.split(/\r?\n/)
+		.filter(Boolean)
+		.slice(0, 30);
+	return [
+		`Subtask "${sub.title}" [id ${sub.slug}] — ${sub.state}${sub.stateReason ? `: ${sub.stateReason}` : ""}`,
+		`Agent: ${sub.agentName ?? "the team's folder"}; folder ${cwd}${sub.identity.branch ? ` (branch ${sub.identity.branch})` : ""}.`,
+		sub.revisions?.length
+			? `Revisions asked so far: ${sub.revisions.length}. Latest: ${clip(sub.revisions.at(-1)?.text ?? "", 600)}`
+			: "",
+		"",
+		"## The agent's final report",
+		clip(report?.summary?.trim() || "(no report)", 4000),
+		"",
+		"## The independent reviewer",
+		review
+			? `VERDICT ${review.verdict ?? "none"}. ${clip(review.summary?.trim() ?? "", 3000)}`
+			: "(no review run)",
+		"",
+		"## Checks",
+		checks?.checks?.length
+			? checks.checks
+					.map(
+						(c) =>
+							`- ${c.command}: ${c.timedOut ? "timed out" : c.exitCode === 0 ? "passed" : `failed (exit ${c.exitCode})`}`,
+					)
+					.join("\n")
+			: "(none configured)",
+		"",
+		"## Changes",
+		stat || "(no committed or tracked changes since the subtask started)",
+		untracked.length ? `New files not yet in git: ${untracked.join(", ")}` : "",
+		diff ? `\n\`\`\`diff\n${clip(diff, 14_000)}\n\`\`\`` : "",
+	]
+		.filter((line) => line !== "")
+		.join("\n");
 }
 
 export function createTeamMcpHandler(
@@ -364,6 +590,7 @@ export function createTeamMcpHandler(
 		if (!request) return text("start_plan needs the user's request.", true);
 		const plan = parseSplit(
 			`\`\`\`json\n${JSON.stringify(args.plan ?? {})}\n\`\`\``,
+			MAX_TEAM_CHAT_SUBTASKS,
 		);
 		if (!plan) {
 			return text(
@@ -371,14 +598,24 @@ export function createTeamMcpHandler(
 				true,
 			);
 		}
+		const vision =
+			typeof args.vision === "string" ? args.vision.trim().slice(0, 8000) : "";
+		const hours = Number(args.hours);
+		const budget = Number(args.budgetUsdPerSubtask);
 		const ctx = deps.resolveWorkspace(workspaceId);
 		const execution = loadWorkflowSettings(deps.homeDir()).execution;
+		const startedAt = new Date();
 		const created = createTask(ctx.project, {
-			description: request,
+			description: vision
+				? `${request}\n\n## The user's vision (confirmed in the Team chat)\n${vision}`
+				: request,
 			mode: "auto",
 			identity: deps.captureIdentity(workspaceId, ctx.worktreePath),
 			limits: {
-				budgetUsd: execution.taskBudgetUsd,
+				budgetUsd:
+					Number.isFinite(budget) && budget > 0
+						? Math.min(budget, 50)
+						: execution.taskBudgetUsd,
 				maxCorrections: execution.maxCorrections,
 				maxReviewRounds: execution.maxReviewRounds,
 				maxEscalations: execution.maxEscalations,
@@ -401,13 +638,27 @@ export function createTeamMcpHandler(
 			routeBy: "ai",
 			routeReasons: ["planned in the Team chat tab"],
 			specialistReason: "the Coordinator assigns a specialist to each subtask",
+			coordinator: {
+				vision: vision || undefined,
+				review: args.review !== false,
+				startedAt: startedAt.toISOString(),
+				deadline:
+					Number.isFinite(hours) && hours > 0
+						? new Date(
+								startedAt.getTime() + Math.min(hours, 8) * 3_600_000,
+							).toISOString()
+						: undefined,
+			},
 		};
 		saveTask(ctx.project, task);
 		await deps.controller().approvePlan(ctx.project, task.slug);
 		const all = listTaskRecords(ctx.project);
 		const started = getTask(ctx.project, task.slug) ?? task;
+		const reviewing = task.coordinator?.review
+			? " Each subtask waits for your review when it finishes: ADE types an [ADE] message here; then review_subtask, and approve_subtask or revise_subtask."
+			: "";
 		return text(
-			`Started. ${describePlan(started, all)}\n\nProgress also shows in ADE (Tasks, and Team plans).`,
+			`Started. ${describePlan(started, all)}\n\nProgress also shows in ADE (Tasks, Team plans, and the countdown in the top bar).${reviewing}`,
 		);
 	};
 
@@ -427,6 +678,93 @@ export function createTeamMcpHandler(
 		if (!request)
 			return text(id ? `No plan ${id}.` : "No plan has started yet.", !!id);
 		return text(describePlan(request, all));
+	};
+
+	/** The subtask a tool call names, in the plan it belongs to. */
+	const subtaskFor = (workspaceId: string, args: Record<string, unknown>) => {
+		const ctx = deps.resolveWorkspace(workspaceId);
+		const all = listTaskRecords(ctx.project);
+		const { request } = findPlan(all, {});
+		const sub = findSubtask(all, request, args.subtask);
+		if (!sub) {
+			throw new Error(
+				`No subtask "${String(args.subtask ?? "")}". Use the id or number from plan_status.`,
+			);
+		}
+		return { ctx, all, sub };
+	};
+
+	const reviewSubtask = (
+		workspaceId: string,
+		args: Record<string, unknown>,
+	) => {
+		const { sub } = subtaskFor(workspaceId, args);
+		return text(describeWork(sub));
+	};
+
+	const approveSubtask = async (
+		workspaceId: string,
+		args: Record<string, unknown>,
+	) => {
+		const { ctx, sub } = subtaskFor(workspaceId, args);
+		await deps
+			.controller()
+			.coordinatorApprove(
+				ctx.project,
+				sub.slug,
+				typeof args.note === "string" ? args.note : undefined,
+			);
+		return text(
+			`Approved "${sub.title}". The work built on it starts now (plan_status shows it).`,
+		);
+	};
+
+	const reviseSubtask = async (
+		workspaceId: string,
+		args: Record<string, unknown>,
+	) => {
+		const { ctx, sub } = subtaskFor(workspaceId, args);
+		const instructions =
+			typeof args.instructions === "string" ? args.instructions : "";
+		const after = await deps
+			.controller()
+			.coordinatorRevise(ctx.project, sub.slug, instructions);
+		return text(
+			`Sent back to ${sub.agentName ?? "its agent"}: "${sub.title}" (revision ${after.revisions?.length ?? 1}). It runs again with your instructions, then the checks and the review; ADE tells you here when it is ready for your review again.`,
+		);
+	};
+
+	const addSubtask = async (
+		workspaceId: string,
+		args: Record<string, unknown>,
+	) => {
+		const ctx = deps.resolveWorkspace(workspaceId);
+		const all = listTaskRecords(ctx.project);
+		const { id, request } = findPlan(all, args);
+		if (!request) {
+			return text(id ? `No plan ${id}.` : "No plan has started yet.", true);
+		}
+		const parsed = parseSplit(
+			`\`\`\`json\n${JSON.stringify({ reason: "added", subtasks: [{ ...args, dependsOn: [] }] })}\n\`\`\``,
+		);
+		const subtask = parsed?.subtasks[0];
+		if (!subtask) {
+			return text("add_subtask needs a title and a description.", true);
+		}
+		const dependsOn: string[] = [];
+		for (const ref of Array.isArray(args.dependsOn) ? args.dependsOn : []) {
+			const dep = findSubtask(all, request, ref);
+			if (!dep || dep.parentSlug !== request.slug) {
+				return text(`"${String(ref)}" is not a subtask of this plan.`, true);
+			}
+			dependsOn.push(dep.slug);
+		}
+		const after = await deps
+			.controller()
+			.coordinatorAddSubtask(ctx.project, request.slug, subtask, dependsOn);
+		return text(
+			`Added "${subtask.title}".\n\n${describePlan(after, listTaskRecords(ctx.project))}`,
+		);
 	};
 
 	const resumePlan = async (
@@ -555,6 +893,14 @@ export function createTeamMcpHandler(
 				return status(workspaceId, args);
 			case "resume_plan":
 				return resumePlan(workspaceId, args);
+			case "review_subtask":
+				return reviewSubtask(workspaceId, args);
+			case "approve_subtask":
+				return approveSubtask(workspaceId, args);
+			case "revise_subtask":
+				return reviseSubtask(workspaceId, args);
+			case "add_subtask":
+				return addSubtask(workspaceId, args);
 			default:
 				return text(`Unknown tool ${name}`, true);
 		}

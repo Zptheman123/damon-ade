@@ -86,6 +86,8 @@ export interface StageRunDeps {
 	/** Kill a process and its children. */
 	killTree: (pid: number) => Promise<void>;
 	onProgress?: (progress: StageProgress) => void;
+	/** Claude reported the account's plan limits (a rate_limit_event's info). */
+	onRateLimit?: (info: unknown) => void;
 }
 
 export const DEFAULT_STAGE_TIMEOUT_MS = 60 * 60 * 1000;
@@ -238,6 +240,15 @@ export function startStageRun(
 		}
 		if (event.type === "result") {
 			resultLine = event;
+			return;
+		}
+		// The account's plan limits (5-hour and weekly use), for the usage meter.
+		if (event.type === "rate_limit_event") {
+			try {
+				deps.onRateLimit?.(event.rate_limit_info);
+			} catch {
+				// The meter is a help; never a reason to fail a run.
+			}
 			return;
 		}
 		if (event.type !== "assistant") return;

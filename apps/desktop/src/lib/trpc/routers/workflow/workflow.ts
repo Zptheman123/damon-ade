@@ -59,7 +59,9 @@ import {
 	removeCommandApproval,
 	setProjectCommands,
 } from "main/lib/agent-workflow/command-approvals";
+import { planEta } from "main/lib/agent-workflow/plan-eta";
 import {
+	type CoordinatorEvent,
 	getTaskController,
 	type TaskChangeEvent,
 	workflowEvents,
@@ -83,6 +85,7 @@ import {
 	getMetricsDir,
 	loadSessions,
 } from "main/lib/usage-metrics";
+import { loadPlanLimits } from "main/lib/usage-metrics/plan-limits";
 import { env } from "shared/env.shared";
 import { classifyTask, TASK_ROUTES } from "shared/utils/task-routing";
 import { z } from "zod";
@@ -741,6 +744,96 @@ export const createWorkflowRouter = (
 				allTimeUnpriced: allCost.unpricedMessages,
 			};
 		}),
+
+		/**
+		 * The usage meter in every team's top bar: the Claude plan's limits
+		 * as the latest run reported them (5-hour and weekly use), and the
+		 * API-equivalent cost of everything ADE recorded, across all teams.
+		 */
+		getGlobalUsage: publicProcedure.query(() => {
+			const now = new Date();
+			const all = [
+				...dedupeAcrossSessions(loadSessions(getMetricsDir())).values(),
+			].flat();
+			const since = (ms: number) =>
+				costOf(
+					all.filter((record) => {
+						const at = Date.parse(record.timestamp);
+						return Number.isFinite(at) && now.getTime() - at <= ms;
+					}),
+				);
+			const today = localDay(now);
+			const todays = costOf(
+				all.filter((record) => {
+					const at = new Date(record.timestamp);
+					return !Number.isNaN(at.getTime()) && localDay(at) === today;
+				}),
+			);
+			const fiveHours = since(5 * 3_600_000);
+			const week = since(7 * 24 * 3_600_000);
+			return {
+				limits: loadPlanLimits(deps.homeDir()),
+				last5hUsd: fiveHours.usd,
+				todayUsd: todays.usd,
+				weekUsd: week.usd,
+				allTimeUsd: costOf(all).usd,
+				unpriced: week.unpricedMessages > 0,
+			};
+		}),
+
+		/**
+		 * The countdown in the team's top bar: the plan the Team chat is
+		 * running (or just finished), and when it should be done.
+		 */
+		getPlanCountdown: publicProcedure
+			.input(z.object({ workspaceId: z.string() }))
+			.query(({ input }) => {
+				let project: ProjectWorkflow;
+				try {
+					project = deps.resolveWorkspace(input.workspaceId).project;
+				} catch {
+					return null;
+				}
+				const now = new Date();
+				const tasks = listTaskRecords(project);
+				const request = tasks
+					.filter(
+						(t) =>
+							t.isRequest &&
+							!!t.coordinator &&
+							(t.subtaskSlugs?.length ?? 0) > 0 &&
+							t.state !== "cancelled",
+					)
+					.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+				if (!request) return null;
+				const children = (request.subtaskSlugs ?? [])
+					.map((slug) => tasks.find((t) => t.slug === slug))
+					.filter((t): t is TaskRecord => !!t);
+				const eta = planEta(request, children, now);
+				if (request.state === "done") {
+					// Shown for a while after it finished, then the bar goes away.
+					const ended = children
+						.flatMap((c) => c.runs.map((r) => r.endedAt ?? ""))
+						.sort()
+						.at(-1);
+					if (!ended || now.getTime() - Date.parse(ended) > 30 * 60_000) {
+						return null;
+					}
+					return { ...eta, finishAt: ended };
+				}
+				return eta;
+			}),
+
+		/** Pushes what the Team chat should hear about the plans it started. */
+		onCoordinatorEvent: publicProcedure.subscription(() =>
+			observable<CoordinatorEvent>((emit) => {
+				const handler = (event: CoordinatorEvent) => emit.next(event);
+				deps.events.on("coordinator-event", handler);
+				return () => {
+					deps.events.off("coordinator-event", handler);
+				};
+			}),
+		),
 
 		/** The Tasks panel: this workspace's project, its tasks and spend. */
 		getProjectTasks: publicProcedure

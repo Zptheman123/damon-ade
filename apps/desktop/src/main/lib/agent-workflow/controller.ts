@@ -56,7 +56,13 @@ import {
 	resolveSpecialist,
 	type Specialist,
 } from "./specialists";
-import { parseSplit, SPLIT_ROUTING, type SplitPlan } from "./split";
+import {
+	MAX_TEAM_CHAT_SUBTASKS,
+	parseSplit,
+	SPLIT_ROUTING,
+	type SplitPlan,
+	type Subtask,
+} from "./split";
 import { parseVerdict, stagePrompt } from "./stage-prompts";
 import type {
 	PermissionMode,
@@ -566,6 +572,22 @@ function lastIndex(task: TaskRecord, test: (run: TaskRun) => boolean): number {
 	return -1;
 }
 
+/** Changes the Team chat asked for that no run has taken up yet. */
+export function pendingRevision(
+	task: TaskRecord,
+): { at: string; text: string } | undefined {
+	const latest = task.revisions?.at(-1);
+	if (!latest) return undefined;
+	// Taken up once a run for it succeeded (one that failed or was cut off
+	// leaves it to the next run).
+	const run = latest.runId
+		? task.runs.find((r) => r.id === latest.runId)
+		: undefined;
+	return run?.status === "succeeded" || (run && activeRun(task) === run)
+		? undefined
+		: latest;
+}
+
 const count = (task: TaskRecord, kind: RunKind) =>
 	task.runs.filter((run) => run.kind === kind && run.status !== "queued")
 		.length;
@@ -927,6 +949,15 @@ export function decideNext(
 		};
 	}
 
+	// The Team chat reviewed the finished work and asked for changes.
+	if (pendingRevision(task)) {
+		return {
+			type: "run",
+			kind: "fix",
+			reason: "the Team chat asked for changes",
+		};
+	}
+
 	// Escalation: an open report after the last implementation run.
 	if (files.openEscalations.length > 0) {
 		if (count(t, "escalate") >= limits.maxEscalations) {
@@ -963,7 +994,20 @@ export function decideNext(
 		};
 	}
 
-	const corrections = count(t, "fix");
+	// A revision the Team chat asked for starts new rounds: the corrections
+	// and reviews before it do not count against the work after it.
+	const sinceRevision: TaskRecord = {
+		...t,
+		runs: t.runs.slice(
+			Math.max(
+				0,
+				lastIndex(t, (run) => !!run.revision),
+			),
+		),
+	};
+	const corrections = sinceRevision.runs.filter(
+		(run) => run.kind === "fix" && !run.revision && run.status !== "queued",
+	).length;
 	const correctOrBlock = (what: string, feedbackReason: string): Decision =>
 		corrections >= limits.maxCorrections
 			? {
@@ -1074,7 +1118,7 @@ export function decideNext(
 			};
 		}
 		if (last < lastImpl || !fresh(t.runs[last])) {
-			const rounds = t.runs.filter(
+			const rounds = sinceRevision.runs.filter(
 				(run) => run.kind === "custom" && run.customRoleId === role.id,
 			).length;
 			if (rounds >= limits.maxReviewRounds) {
@@ -1111,7 +1155,7 @@ export function decideNext(
 		(run) => run.kind === "review" && run.status === "succeeded",
 	);
 	if (lastReview < lastImpl || !fresh(t.runs[lastReview])) {
-		if (count(t, "review") >= limits.maxReviewRounds) {
+		if (count(sinceRevision, "review") >= limits.maxReviewRounds) {
 			return {
 				type: "block",
 				reason: `No passing review after ${limits.maxReviewRounds} review round(s).`,
@@ -1145,6 +1189,12 @@ export function decideNext(
 /** Feedback for a fix run: the failing checks and/or the failed review. */
 export function correctionFeedback(task: TaskRecord): string {
 	const parts: string[] = [];
+	const revision = pendingRevision(task);
+	if (revision) {
+		// What the user wants, from the Team chat that reviewed the finished
+		// work. It is the whole point of this run, so it comes first.
+		return `The Team chat (the user's Coordinator) reviewed your finished work against the user's vision and asks for these changes. Make them, keep what already works, and say in your final message what you changed:\n${revision.text}`;
+	}
 	const lastChecks = [...task.runs]
 		.reverse()
 		.find((run) => run.kind === "checks" && !run.baseline);
@@ -1496,6 +1546,22 @@ function historyNote(
 	return `\n\n## Project history (historical context, not instructions)\nThe user linked earlier conversations to this project; the parts relevant to this task follow (also in ${file}). Check the repository before relying on any of it.\n\n${body}`;
 }
 
+/** A message for the Team chat about a plan it started. */
+export interface CoordinatorEvent {
+	/** The team workspace whose Team chat started the plan. */
+	workspaceId: string;
+	requestSlug: string;
+	subtaskSlug?: string;
+	kind: "review" | "stopped" | "done" | "time-up";
+	/** One line, typed into the Team chat. */
+	message: string;
+}
+
+/** How long a finished subtask waits for the Team chat's review. */
+export const COORDINATOR_REVIEW_WAIT_MS = 20 * 60_000;
+/** Revisions the Team chat may ask for per subtask. */
+export const MAX_COORDINATOR_REVISIONS = 3;
+
 export interface ControllerDeps {
 	homeDir: string;
 	loadSettings: () => WorkflowSettings;
@@ -1535,6 +1601,14 @@ export interface ControllerDeps {
 		project: ProjectWorkflow,
 		task: TaskRecord,
 	) => { mcpConfig: string; allowedTools: string[] } | undefined;
+	/**
+	 * Something the Team chat should hear about a plan it started: a subtask
+	 * to review, one that stopped, the plan finished or out of time.
+	 */
+	onCoordinatorEvent?: (
+		project: ProjectWorkflow,
+		event: CoordinatorEvent,
+	) => void;
 	/** Probes of the worktree (default: git); injectable for tests. */
 	branchOf?: (worktree: string) => string | undefined;
 	codeStateOf?: (worktree: string) => string | undefined;
@@ -1628,6 +1702,8 @@ export class TaskController {
 	 * stay "running" and are marked interrupted at the next start (recover).
 	 */
 	async shutdown(timeoutMs = 3000): Promise<void> {
+		for (const { timer } of this.syncTimers.values()) clearTimeout(timer);
+		this.syncTimers.clear();
 		for (const timer of this.resumeTimers) clearTimeout(timer);
 		this.resumeTimers.clear();
 		const kills = [...this.live.values()].map((live) =>
@@ -1728,12 +1804,233 @@ export class TaskController {
 						this.resumeLater(project, slug, 15_000);
 					}
 				}
+				// A plan from the Team chat may be waiting only for reviews,
+				// whose time-outs did not survive the restart: look again soon.
+				if (
+					task.isRequest &&
+					task.coordinator?.review &&
+					task.state === "running" &&
+					(task.subtaskSlugs?.length ?? 0) > 0
+				) {
+					this.syncLater(project, slug, 20_000);
+				}
 			}
 		}
 		return recovered;
 	}
 
 	private resumeTimers = new Set<ReturnType<typeof setTimeout>>();
+	/** A later look at a team request (a review that may time out), per request. */
+	private syncTimers = new Map<
+		string,
+		{ due: number; timer: ReturnType<typeof setTimeout> }
+	>();
+
+	/** Look at a team request again in `ms` (the earliest asked for wins). */
+	private syncLater(project: ProjectWorkflow, slug: string, ms: number): void {
+		const key = `${project.key}/${slug}`;
+		const due = Date.now() + ms;
+		const existing = this.syncTimers.get(key);
+		if (existing && existing.due <= due) return;
+		if (existing) clearTimeout(existing.timer);
+		const timer = setTimeout(() => {
+			this.syncTimers.delete(key);
+			this.kickRequest(project, slug);
+		}, ms);
+		timer.unref?.();
+		this.syncTimers.set(key, { due, timer });
+	}
+
+	/** Tell the Team chat something about its plan, once per key. */
+	private tell(
+		project: ProjectWorkflow,
+		request: TaskRecord,
+		key: string,
+		event: Omit<CoordinatorEvent, "workspaceId" | "requestSlug">,
+	): void {
+		const coord = request.coordinator;
+		if (!coord || coord.told?.includes(key)) return;
+		coord.told = [...(coord.told ?? []), key].slice(-200);
+		try {
+			this.deps.onCoordinatorEvent?.(project, {
+				...event,
+				workspaceId: request.identity.workspaceId,
+				requestSlug: request.slug,
+			});
+		} catch (error) {
+			console.warn("[workflow] Telling the Team chat failed:", error);
+		}
+	}
+
+	/** The team request a subtask belongs to, checked to be the Team chat's. */
+	private coordinatedParent(
+		project: ProjectWorkflow,
+		child: TaskRecord,
+	): TaskRecord {
+		const request = child.parentSlug
+			? getTask(project, child.parentSlug)
+			: undefined;
+		if (!request?.coordinator) {
+			throw new Error(
+				`"${child.title}" is not part of a plan started from the Team chat`,
+			);
+		}
+		return request;
+	}
+
+	/** The Team chat approves a finished subtask: the work built on it starts. */
+	coordinatorApprove(
+		project: ProjectWorkflow,
+		slug: string,
+		note?: string,
+	): Promise<TaskRecord> {
+		return withTaskLock(project, slug, () => {
+			const child = this.load(project, slug);
+			const request = this.coordinatedParent(project, child);
+			if (child.state !== "done") {
+				throw new Error(
+					`"${child.title}" is ${child.state}, not finished: only finished work is approved`,
+				);
+			}
+			child.review = {
+				state: "approved",
+				since: this.deps.now().toISOString(),
+				rounds: child.review?.rounds ?? 0,
+				by: "coordinator",
+				note: note?.trim().slice(0, 2000) || undefined,
+			};
+			saveTask(project, child);
+			this.deps.onChange?.(project, slug);
+			this.kickRequest(project, request.slug);
+			return child;
+		});
+	}
+
+	/**
+	 * The Team chat asks for changes to a subtask's work: its agent runs
+	 * again (a fix run with these instructions first), then the checks and
+	 * the review, and the Team chat reviews it again.
+	 */
+	async coordinatorRevise(
+		project: ProjectWorkflow,
+		slug: string,
+		instructions: string,
+	): Promise<TaskRecord> {
+		const text = instructions.trim();
+		if (!text) throw new Error("Write what to change first");
+		const child = await withTaskLock(project, slug, () => {
+			const task = this.load(project, slug);
+			const request = this.coordinatedParent(project, task);
+			const deadline = request.coordinator?.deadline;
+			if (deadline && this.deps.now().getTime() >= Date.parse(deadline)) {
+				throw new Error(
+					"The time box agreed with the user has passed: no new work starts. Tell the user what is left.",
+				);
+			}
+			if (activeRun(task) || task.state === "running") {
+				throw new Error(
+					`"${task.title}" is still running. Revise it when it has finished.`,
+				);
+			}
+			if (task.state === "cancelled") {
+				throw new Error(`"${task.title}" was cancelled`);
+			}
+			if (task.permissionBlock) {
+				throw new Error(
+					`"${task.title}" waits for the user to approve a command; only the user can settle that.`,
+				);
+			}
+			if (!evidenceView(task).runs.some(isImplementation)) {
+				throw new Error(
+					`"${task.title}" has no work to revise yet. Use resume_plan to continue it.`,
+				);
+			}
+			const rounds = task.revisions?.length ?? 0;
+			if (rounds >= MAX_COORDINATOR_REVISIONS) {
+				throw new Error(
+					`"${task.title}" was revised ${rounds} times already. Approve it, add a subtask for what is left, or tell the user.`,
+				);
+			}
+			const at = this.deps.now().toISOString();
+			appendNotes(
+				project,
+				task,
+				`Revision asked for by the Team chat:\n${text}`,
+				at,
+			);
+			task.revisions = [
+				...(task.revisions ?? []),
+				{ at, text: text.slice(0, 8000) },
+			];
+			task.review = { state: "revising", since: at, rounds: rounds + 1 };
+			task.accepted = undefined;
+			const last = task.runs[task.runs.length - 1];
+			if (last && last.status !== "succeeded") task.acknowledgedRunId = last.id;
+			task.pauseRequested = false;
+			task.waitingForFolder = undefined;
+			// Running (not idle) at once, so the request does not start it
+			// afresh as a new subtask in the meantime.
+			task.state = "running";
+			task.stateReason = "Revising, as the Team chat asked.";
+			saveTask(project, task);
+			return task;
+		});
+		// The request runs again until the revised work is reviewed.
+		await withTaskLock(project, child.parentSlug as string, () => {
+			const request = getTask(project, child.parentSlug as string);
+			if (request && request.state !== "cancelled") {
+				request.state = "running";
+				request.stateReason = `Revising "${child.title}", as the Team chat asked.`;
+				saveTask(project, request);
+				this.deps.onChange?.(project, request.slug);
+			}
+		});
+		return withTaskLock(project, slug, () =>
+			this.advance(project, this.load(project, slug)),
+		);
+	}
+
+	/** The Team chat adds a subtask to its running (or finished) plan. */
+	coordinatorAddSubtask(
+		project: ProjectWorkflow,
+		requestSlug: string,
+		subtask: Subtask,
+		dependsOnSlugs: string[],
+	): Promise<TaskRecord> {
+		return withTaskLock(project, requestSlug, () => {
+			const request = this.load(project, requestSlug);
+			if (!request.isRequest || !request.coordinator) {
+				throw new Error("This is not a plan started from the Team chat");
+			}
+			if (request.state === "cancelled") {
+				throw new Error("This plan was cancelled");
+			}
+			const deadline = request.coordinator.deadline;
+			if (deadline && this.deps.now().getTime() >= Date.parse(deadline)) {
+				throw new Error(
+					"The time box agreed with the user has passed: no new work starts.",
+				);
+			}
+			const slugs = request.subtaskSlugs ?? [];
+			if (slugs.length >= MAX_TEAM_CHAT_SUBTASKS) {
+				throw new Error(
+					`The plan has ${slugs.length} subtasks, the most it may have.`,
+				);
+			}
+			const unknown = dependsOnSlugs.filter((s) => !slugs.includes(s));
+			if (unknown.length) {
+				throw new Error(`Not subtasks of this plan: ${unknown.join(", ")}`);
+			}
+			const child = this.subtaskFor(project, request, subtask, dependsOnSlugs);
+			request.subtaskSlugs = [...slugs, child.slug];
+			if (request.state === "done") {
+				request.state = "running";
+				request.stateReason = `Added "${child.title}" from the Team chat.`;
+			}
+			saveTask(project, request);
+			return this.syncRequest(project, request);
+		});
+	}
 
 	/**
 	 * A task stopped or finished in this folder: start the next task queued
@@ -2539,9 +2836,19 @@ export class TaskController {
 			customRoleId: customRole?.id,
 			customAccess: customRole?.access,
 		};
+		// This fix carries out the Team chat's revision (its feedback above).
+		const revision = kind === "fix" ? pendingRevision(task) : undefined;
+		if (revision) {
+			run.revision = true;
+			task.revisions = task.revisions?.map((r) =>
+				r === revision ? { ...r, runId: run.id } : r,
+			);
+		}
 		task.runs.push(run);
 		task.state = "running";
-		task.stateReason = `${kind} on ${model}`;
+		task.stateReason = revision
+			? `Revising, as the Team chat asked (${model})`
+			: `${kind} on ${model}`;
 
 		const command = this.deps.resolveClaude();
 		if (!command) {
@@ -2872,68 +3179,89 @@ ${(run.summary ?? "").trim()}
 		request: TaskRecord,
 		plan: SplitPlan,
 	): void {
-		const specialists = listSpecialists(project);
 		const slugs: string[] = [];
 		for (const sub of plan.subtasks) {
-			const wanted = sub.specialist?.toLowerCase();
-			const owner = wanted
-				? specialists.find(
-						(s) =>
-							s.name.toLowerCase() === wanted ||
-							s.specialty.toLowerCase() === wanted,
-					)
-				: undefined;
-			const agent = owner?.agentWorkspaceId
-				? request.teamAgents?.find(
-						(a) => a.workspaceId === owner.agentWorkspaceId,
-					)
-				: undefined;
-			const created = createTask(project, {
-				description: `${sub.title}\n\n${sub.description}\n\n(Part of the team request "${request.title}".)`,
-				route: sub.route,
-				mode: "auto",
-				identity: agent
-					? captureIdentity(agent.workspaceId, agent.worktreePath)
-					: request.identity,
-				limits: request.limits,
-			});
-			const child: TaskRecord = {
-				...created,
-				title: sub.title,
-				parentSlug: request.slug,
-				// The request's attachments go to every subtask.
-				attachments: request.attachments,
-				dependsOn: sub.dependsOn.map((index) => slugs[index]),
-				agentName: agent?.name,
-				history: request.history,
-				routeBy: "ai",
-				routeReasons: ["assigned by the Coordinator"],
-				roleOverrides: Object.fromEntries(
-					Object.entries(sub.models).map(([role, model]) => [role, { model }]),
-				),
-				specialistId: owner?.id,
-				// The Research Agent's work starts with web research.
-				...(owner?.templateId === RESEARCH_TEMPLATE_ID
-					? { research: "first" as const }
-					: {}),
-				specialistReason: owner
-					? "assigned by the Coordinator"
-					: sub.specialist
-						? `the Coordinator named "${sub.specialist}", which is not a specialist here: default workflow`
-						: "default workflow (assigned by the Coordinator)",
-				triage: {
-					applied: true,
-					route: sub.route,
-					models: sub.models,
-					specialist: owner?.name,
-					reason: "assigned by the Coordinator",
-				},
-			};
-			saveTask(project, child);
+			const child = this.subtaskFor(
+				project,
+				request,
+				sub,
+				sub.dependsOn.map((index) => slugs[index]),
+			);
 			slugs.push(child.slug);
 		}
 		request.subtaskSlugs = slugs;
 		request.splitReason = plan.reason;
+	}
+
+	/** One subtask of a team request, on its specialist's agent (saved). */
+	private subtaskFor(
+		project: ProjectWorkflow,
+		request: TaskRecord,
+		sub: Subtask,
+		dependsOn: string[],
+	): TaskRecord {
+		const specialists = listSpecialists(project);
+		const wanted = sub.specialist?.toLowerCase();
+		const owner = wanted
+			? specialists.find(
+					(s) =>
+						s.name.toLowerCase() === wanted ||
+						s.specialty.toLowerCase() === wanted,
+				)
+			: undefined;
+		const agent = owner?.agentWorkspaceId
+			? request.teamAgents?.find(
+					(a) => a.workspaceId === owner.agentWorkspaceId,
+				)
+			: undefined;
+		// Every agent works toward the vision the user confirmed in the Team chat.
+		const vision = request.coordinator?.vision
+			? `\n\n## The user's vision (from the Team chat)\nYour subtask is one part of this. Match it exactly; where it is silent, choose what fits it best.\n${request.coordinator.vision}`
+			: "";
+		const created = createTask(project, {
+			description: `${sub.title}\n\n${sub.description}\n\n(Part of the team request "${request.title}".)${vision}`,
+			route: sub.route,
+			mode: "auto",
+			identity: agent
+				? captureIdentity(agent.workspaceId, agent.worktreePath)
+				: request.identity,
+			limits: request.limits,
+		});
+		const child: TaskRecord = {
+			...created,
+			title: sub.title,
+			parentSlug: request.slug,
+			// The request's attachments go to every subtask.
+			attachments: request.attachments,
+			dependsOn,
+			agentName: agent?.name,
+			history: request.history,
+			routeBy: "ai",
+			routeReasons: ["assigned by the Coordinator"],
+			roleOverrides: Object.fromEntries(
+				Object.entries(sub.models).map(([role, model]) => [role, { model }]),
+			),
+			specialistId: owner?.id,
+			// The Research Agent's work starts with web research.
+			...(owner?.templateId === RESEARCH_TEMPLATE_ID
+				? { research: "first" as const }
+				: {}),
+			specialistReason: owner
+				? "assigned by the Coordinator"
+				: sub.specialist
+					? `the Coordinator named "${sub.specialist}", which is not a specialist here: default workflow`
+					: "default workflow (assigned by the Coordinator)",
+			triage: {
+				applied: true,
+				route: sub.route,
+				models: sub.models,
+				specialist: owner?.name,
+				reason: "assigned by the Coordinator",
+			},
+			estimateMinutes: sub.minutes,
+		};
+		saveTask(project, child);
+		return child;
 	}
 
 	/** The Coordinator's reply in a team chat: its words, and any plan. */
@@ -3382,13 +3710,86 @@ ${(run.summary ?? "").trim()}
 			stopped = [];
 		}
 
+		// Started from the Team chat: it reviews each finished subtask
+		// against the user's vision before the work built on it starts, and
+		// no new work starts after the time box the user agreed to.
+		const coord = request.coordinator;
+		const now = this.deps.now();
+		if (coord?.deadline && options.resumeChild) {
+			// Resumed after the time was up: the rest may run now.
+			if (now.getTime() >= Date.parse(coord.deadline)) {
+				coord.deadline = undefined;
+			}
+		}
+		const timeUp =
+			!!coord?.deadline && now.getTime() >= Date.parse(coord.deadline);
+		const approved = (c: TaskRecord) =>
+			!coord?.review ||
+			c.state === "cancelled" ||
+			c.review?.state === "approved";
+		if (coord?.review) {
+			for (const child of children) {
+				if (child.state !== "done") continue;
+				if (!child.review || child.review.state === "revising") {
+					child.review = {
+						state: "waiting",
+						since: now.toISOString(),
+						rounds: child.review?.rounds ?? 0,
+					};
+					saveTask(project, child);
+					this.tell(
+						project,
+						request,
+						`review:${child.slug}:${child.review.rounds}`,
+						{
+							kind: "review",
+							subtaskSlug: child.slug,
+							message: `[ADE] "${child.title}" (${child.slug}) is finished${child.review.rounds ? ` after revision ${child.review.rounds}` : ""}. Review it against the vision with review_subtask, then approve_subtask or revise_subtask. Work that builds on it waits for you.`,
+						},
+					);
+				}
+				if (child.review.state !== "waiting") continue;
+				const waited = now.getTime() - Date.parse(child.review.since);
+				if (timeUp || waited >= COORDINATOR_REVIEW_WAIT_MS) {
+					child.review = {
+						...child.review,
+						state: "approved",
+						by: timeUp ? "time-up" : "timeout",
+						since: now.toISOString(),
+					};
+					saveTask(project, child);
+				} else {
+					this.syncLater(
+						project,
+						request.slug,
+						COORDINATOR_REVIEW_WAIT_MS - waited + 1000,
+					);
+				}
+			}
+		}
+		if (coord) {
+			for (const child of stopped) {
+				if (child.waitingForFolder) continue;
+				this.tell(
+					project,
+					request,
+					`stopped:${child.slug}:${child.runs.length}:${child.state}`,
+					{
+						kind: "stopped",
+						subtaskSlug: child.slug,
+						message: `[ADE] "${child.title}" (${child.slug}) stopped: ${(child.stateReason ?? child.state).replace(/\s+/g, " ").slice(0, 300)} Decide: resume_plan, revise_subtask with clearer instructions, or tell the user only if they must act.`,
+					},
+				);
+			}
+		}
+
 		const busy = new Set(active.map((c) => folderKey(c.identity.worktreePath)));
 		for (const child of children) {
-			if (held || child.state !== "idle") continue;
+			if (held || timeUp || child.state !== "idle") continue;
 			const dependencies = (child.dependsOn ?? [])
 				.map((slug) => children.find((c) => c.slug === slug))
 				.filter((c): c is TaskRecord => !!c);
-			if (!dependencies.every(settled)) continue;
+			if (!dependencies.every((c) => settled(c) && approved(c))) continue;
 			const folder = folderKey(child.identity.worktreePath);
 			if (busy.has(folder)) continue;
 			const problem =
@@ -3426,9 +3827,24 @@ ${(run.summary ?? "").trim()}
 			c.agentName
 				? `${c.agentName}${c.identity.branch ? ` (${c.identity.branch})` : ""}`
 				: (c.identity.branch ?? c.identity.worktreePath);
+		const inReview = done.filter((c) => !approved(c));
+		const reviewNote = inReview.length
+			? ` · the Team chat is reviewing ${inReview.map((c) => `"${c.title}"`).join(", ")}`
+			: "";
 		if (active.length > 0) {
 			request.state = "running";
-			request.stateReason = `Running: ${active.map((c) => `"${c.title}" in ${where(c)}`).join("; ")} · ${done.length} of ${children.length} done`;
+			request.stateReason = `Running: ${active.map((c) => `"${c.title}" in ${where(c)}`).join("; ")} · ${done.length} of ${children.length} done${reviewNote}`;
+		} else if (inReview.length > 0 && stopped.length === 0) {
+			request.state = "running";
+			request.stateReason = `Waiting for the Team chat's review${reviewNote.replace(" · the Team chat is reviewing", ":")} · ${done.length} of ${children.length} done (approved by itself after ${COORDINATOR_REVIEW_WAIT_MS / 60_000} minutes without an answer)`;
+		} else if (timeUp && !children.every(settled)) {
+			const left = children.filter((c) => !settled(c));
+			request.state = "paused";
+			request.stateReason = `Time is up: the time box agreed in the Team chat has passed, so ADE started no new work. ${done.length} of ${children.length} done; not started: ${left.map((c) => `"${c.title}"`).join(", ")}. Resume runs the rest.`;
+			this.tell(project, request, "time-up", {
+				kind: "time-up",
+				message: `[ADE] Time is up for plan ${request.slug}: ${done.length} of ${children.length} subtasks done, no new work starts. Tell the user what was finished and what was not (plan_status).`,
+			});
 		} else if (children.every(settled)) {
 			const cancelled = children.length - done.length;
 			// Where the finished work ends up: subtasks no other one builds on.
@@ -3444,6 +3860,15 @@ ${(run.summary ?? "").trim()}
 			const delivered = this.deliverRequest(project, request, ends, where);
 			request.state = "done";
 			request.stateReason = `Verified: all ${done.length} subtask(s) are done${cancelled ? `; ${cancelled} cancelled` : ""}.${delivered}`;
+			this.tell(
+				project,
+				request,
+				`done:${children.length}:${children.reduce((n, c) => n + (c.revisions?.length ?? 0), 0)}`,
+				{
+					kind: "done",
+					message: `[ADE] Plan ${request.slug} is finished: ${done.length} of ${children.length} subtasks done.${delivered} Do a final check of the whole result against the vision. If something still falls short, revise_subtask or add_subtask; otherwise tell the user it is done and how to try it.`,
+				},
+			);
 		} else {
 			const first = stopped[0];
 			request.state = "paused";

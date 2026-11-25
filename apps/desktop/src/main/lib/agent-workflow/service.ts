@@ -7,6 +7,7 @@ import { getSupersetHomeDir } from "../app-environment";
 import { findGitBash } from "../terminal/windows-shell";
 import { treeKillWithEscalation } from "../tree-kill";
 import { scheduleSessionRecording, transcriptPathFor } from "../usage-metrics";
+import { recordPlanLimits } from "../usage-metrics/plan-limits";
 import { electronCipher } from "../vercel/electron-cipher";
 import { syncVercelMcpConfig, VERCEL_READ_TOOL_RULES } from "../vercel/mcp";
 import { teamVercelLink } from "../vercel/service";
@@ -29,6 +30,9 @@ export interface TaskChangeEvent {
 	projectKey: string;
 	slug: string;
 }
+
+/** Emitted as "coordinator-event": something the Team chat should hear. */
+export type { CoordinatorEvent } from "./controller";
 
 export const workflowEvents = new EventEmitter();
 workflowEvents.setMaxListeners(50);
@@ -95,7 +99,16 @@ export function getTaskController(): TaskController {
 			return executable ? [executable] : null;
 		},
 		startRun: (spec, onProgress) =>
-			startStageRun(spec, { killTree, onProgress }),
+			startStageRun(spec, {
+				killTree,
+				onProgress,
+				onRateLimit: (info) =>
+					recordPlanLimits(getSupersetHomeDir(), info, new Date()),
+			}),
+		// The Team chat hears about the plans it started (TeamChatRelay types
+		// it into the Team chat tab).
+		onCoordinatorEvent: (_project, event) =>
+			workflowEvents.emit("coordinator-event", event),
 		runChecks: ({ cwd, commands, signal, continuePast }) =>
 			runChecks({
 				cwd,

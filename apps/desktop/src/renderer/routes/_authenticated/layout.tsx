@@ -1,8 +1,4 @@
-import {
-	createFileRoute,
-	Outlet,
-	useNavigate,
-} from "@tanstack/react-router";
+import { createFileRoute, Outlet, useNavigate } from "@tanstack/react-router";
 import { DndProvider } from "react-dnd";
 import { NewAgentModal } from "renderer/components/NewAgentModal/NewAgentModal";
 import { NewCategoryModal } from "renderer/components/NewCategoryModal/NewCategoryModal";
@@ -17,6 +13,7 @@ import { useTabsSyncSubscription } from "renderer/stores/tabs/useTabsSyncSubscri
 import { useWorkspaceInitStore } from "renderer/stores/workspace-init";
 import { MOCK_ORG_ID } from "shared/constants";
 import { AgentHooks } from "./components/AgentHooks";
+import { TeamChatRelay } from "./components/TeamChatRelay";
 import { TeardownLogsDialog } from "./components/TeardownLogsDialog";
 import { CollectionsProvider } from "./providers/CollectionsProvider";
 
@@ -69,6 +66,7 @@ function AuthenticatedLayout() {
 				<AgentHooks />
 				<Outlet />
 				<WorkspaceInitEffects />
+				<TeamChatRelay />
 				<NewAgentModal />
 				<NewCategoryModal />
 				<InitGitDialog />

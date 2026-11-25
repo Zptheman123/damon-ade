@@ -21,6 +21,8 @@ export const SPLIT_ROUTING = {
 };
 
 export const MAX_SUBTASKS = 6;
+/** A plan started from the Team chat may be longer: hours of work, unattended. */
+export const MAX_TEAM_CHAT_SUBTASKS = 12;
 
 const ROUTES: TaskRoute[] = ["quick", "implement", "plan", "exceptional"];
 const MODELS = ["haiku", "sonnet", "opus", "fable"] as const;
@@ -43,6 +45,8 @@ export interface Subtask {
 	models: Partial<Record<RoleName, Model>>;
 	/** Earlier subtasks (indexes in this plan) whose work this one needs. */
 	dependsOn: number[];
+	/** The Coordinator's estimate of how long it takes, in minutes. */
+	minutes?: number;
 }
 
 export interface SplitPlan {
@@ -55,7 +59,10 @@ function text(value: unknown, max: number): string {
 }
 
 /** Read the Coordinator's plan from its reply (a JSON block). */
-export function parseSplit(reply: string | undefined): SplitPlan | undefined {
+export function parseSplit(
+	reply: string | undefined,
+	maxSubtasks = MAX_SUBTASKS,
+): SplitPlan | undefined {
 	if (!reply) return undefined;
 	const blocks = [...reply.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)].map(
 		(m) => m[1],
@@ -76,7 +83,7 @@ export function parseSplit(reply: string | undefined): SplitPlan | undefined {
 		// The Coordinator numbers subtasks from 1 in its own list; skipped
 		// entries must not shift what the others depend on.
 		const indexOf = new Map<number, number>();
-		const items = data.subtasks.slice(0, MAX_SUBTASKS);
+		const items = data.subtasks.slice(0, maxSubtasks);
 		for (const [position, item] of items.entries()) {
 			if (!item || typeof item !== "object") continue;
 			const entry = item as Record<string, unknown>;
@@ -108,7 +115,11 @@ export function parseSplit(reply: string | undefined): SplitPlan | undefined {
 					? [subtasks.length - 1]
 					: [];
 			indexOf.set(position, subtasks.length);
+			const minutes = Number(entry.minutes);
 			subtasks.push({
+				...(Number.isFinite(minutes) && minutes > 0
+					? { minutes: Math.min(Math.round(minutes), 480) }
+					: {}),
 				dependsOn,
 				title,
 				description,

@@ -1,0 +1,1 @@
+export { teamChatPane } from "./teamChatPane";

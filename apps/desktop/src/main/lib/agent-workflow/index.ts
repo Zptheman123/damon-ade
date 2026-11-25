@@ -97,6 +97,8 @@ export {
 export {
 	activeRun,
 	type CheckResult,
+	type CoordinatorReview,
+	type CoordinatorRun,
 	createTask,
 	type ExecutionMode,
 	getTask,

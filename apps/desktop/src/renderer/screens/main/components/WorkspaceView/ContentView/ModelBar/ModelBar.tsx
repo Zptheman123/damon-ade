@@ -25,12 +25,14 @@ import { useAgentSession } from "renderer/stores/tabs/useAgentSession";
 import { useTasksSheet } from "renderer/stores/tasks-sheet";
 import { GitHubSync } from "./components/GitHubSync";
 import { HistorySheet } from "./components/HistorySheet";
+import { PlanCountdown } from "./components/PlanCountdown";
 import { PreviewButton } from "./components/PreviewButton";
 import { RunSheet } from "./components/RunSheet";
 import { SpecialistsSheet } from "./components/SpecialistsSheet";
 import { TasksSheet } from "./components/TasksSheet";
 import { TeamChatSheet } from "./components/TeamChatSheet";
 import { TeamControls } from "./components/TeamControls";
+import { UsageMeter } from "./components/UsageMeter";
 import { VercelSite } from "./components/VercelSite";
 import { useAttention } from "./hooks/useAttention";
 import { useRunTargets } from "./hooks/useRunTargets";
@@ -157,6 +159,7 @@ export function ModelBar() {
 			</div>
 
 			<div className="ml-auto flex items-center gap-0.5">
+				<UsageMeter />
 				{ready && <GitHubSync workspaceId={workspaceId} />}
 				<div className="mx-1 h-4 w-px bg-border" aria-hidden />
 				<Tooltip>
@@ -274,6 +277,7 @@ export function ModelBar() {
 						<TeamControls workspaceId={workspaceId} />
 					</>
 				)}
+				{ready && <PlanCountdown workspaceId={workspaceId} />}
 				{teamChat.available && (
 					<Tooltip>
 						<TooltipTrigger asChild>

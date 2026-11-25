@@ -37,6 +37,12 @@ let settingsModule: typeof import("main/lib/agent-workflow/workflow-settings");
 let teamMcp: (workspaceId: string, body: unknown) => Promise<unknown>;
 let teamMcpModule: typeof import("../workflow/team-mcp");
 const workspaces = new Map<string, { root: string; worktree: string }>();
+/** What ADE told the Team chat about its plans. */
+const coordinatorEvents: Array<{
+	workspaceId: string;
+	kind: string;
+	message: string;
+}> = [];
 /** The team's agents, as ADE's database would list them. */
 const agentsByWorkspace = new Map<
 	string,
@@ -94,6 +100,7 @@ beforeAll(async () => {
 		homeDir: TEST_HOME,
 		loadSettings: () => settingsModule.loadWorkflowSettings(TEST_HOME),
 		resolveClaude: () => fake.command,
+		onCoordinatorEvent: (_project, event) => coordinatorEvents.push(event),
 		startRun: (spec, onProgress) =>
 			runner.startStageRun(spec, { spawnFn, killTree, onProgress }),
 		runChecks: ({ cwd, commands, signal, continuePast }) =>
@@ -1212,6 +1219,10 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 			"start_plan",
 			"plan_status",
 			"resume_plan",
+			"review_subtask",
+			"approve_subtask",
+			"revise_subtask",
+			"add_subtask",
 		]);
 		expect((await rpc("no/such")).error?.message).toContain("Method not found");
 
@@ -1245,6 +1256,8 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		const before = fake.calls().length;
 		const started = await tool("start_plan", {
 			request: "A grades API and a page that shows it",
+			// Without the Team chat's review: each subtask counts once done.
+			review: false,
 			plan: {
 				reason: "the page needs the API",
 				subtasks: [
@@ -1313,6 +1326,15 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		// Resuming needs no extra click; starting a plan still asks.
 		expect(permissions.allow).toContain("mcp__ade-team__resume_plan");
 		expect(permissions.allow).not.toContain("mcp__ade-team__start_plan");
+		// Reviewing and revising run unattended, while the user is away.
+		expect(permissions.allow).toEqual(
+			expect.arrayContaining([
+				"mcp__ade-team__review_subtask",
+				"mcp__ade-team__approve_subtask",
+				"mcp__ade-team__revise_subtask",
+				"mcp__ade-team__add_subtask",
+			]),
+		);
 		expect(command).toContain(
 			`--settings "${settingsPath.replace(/\\/g, "/")}"`,
 		);
@@ -1320,6 +1342,151 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 		expect(command).not.toContain(
 			written.mcpServers["ade-team"].headers.Authorization.slice(7),
 		);
+	}, 120_000);
+
+	it("the Team chat reviews each finished subtask against the vision, sends it back with exact changes, then approves it", async () => {
+		const repo = makeRepo("vision");
+		workspaces.set("ws-vision", { root: repo, worktree: repo });
+		await tasks.setChecks({ workspaceId: "ws-vision", commands: [] });
+		const tool = async (name: string, args: Record<string, unknown> = {}) => {
+			const reply = (await teamMcp("ws-vision", {
+				jsonrpc: "2.0",
+				id: 1,
+				method: "tools/call",
+				params: { name, arguments: args },
+			})) as {
+				result: { content: Array<{ text: string }>; isError?: boolean };
+			};
+			return {
+				text: reply.result.content[0].text,
+				isError: !!reply.result.isError,
+			};
+		};
+		coordinatorEvents.length = 0;
+		const kinds = () => coordinatorEvents.map((e) => e.kind);
+
+		fake.setSteps([
+			{
+				name: "header",
+				write: { "src/header.js": "export const color = 'red';\n" },
+				cost: 0.01,
+			},
+			{ name: "header-review", text: "Looks fine.\nVERDICT: PASS", cost: 0.01 },
+		]);
+		const start = fake.calls().length;
+		const started = await tool("start_plan", {
+			request: "A header and a footer",
+			vision: "A calm site: a BLUE header with the site's name, and a footer.",
+			hours: 4,
+			plan: {
+				reason: "the footer sits under the header",
+				subtasks: [
+					{
+						title: "Header",
+						description: "The header with the name.",
+						route: "quick",
+						minutes: 10,
+						dependsOn: [],
+					},
+					{
+						title: "Footer",
+						description: "The footer.",
+						route: "quick",
+						minutes: 10,
+						dependsOn: [1],
+					},
+				],
+			},
+		});
+		expect(started.isError).toBe(false);
+		await controller.idle();
+		let runs = fake.calls().slice(start);
+		expect(runs.map((c) => c.step)).toEqual(["header", "header-review"]);
+		// Every agent works toward the vision the user confirmed.
+		expect(runs[0].stdin).toContain("A calm site: a BLUE header");
+
+		// Finished: it waits for the Team chat, and so does the Footer.
+		let status = await tool("plan_status");
+		expect(status.text).toContain("WAITING FOR YOUR REVIEW");
+		expect(status.text).toMatch(/2\. Footer \[id \S+\] — idle/);
+		expect(status.text).toContain("Time left: about");
+		expect(kinds()).toEqual(["review"]);
+		expect(coordinatorEvents[0].workspaceId).toBe("ws-vision");
+		expect(coordinatorEvents[0].message).toStartWith('[ADE] "Header"');
+		const countdown = await tasks.getPlanCountdown({
+			workspaceId: "ws-vision",
+		});
+		expect(countdown?.done).toBe(1);
+		expect(countdown?.total).toBe(2);
+		expect(Date.parse(countdown?.finishAt ?? "")).toBeGreaterThan(Date.now());
+
+		// The agent talks back: its report, the review and its changes.
+		const review = await tool("review_subtask", { subtask: "1" });
+		expect(review.text).toContain("## The agent's final report");
+		expect(review.text).toContain("VERDICT PASS");
+		expect(review.text).toContain("src/header.js");
+
+		// Not what the user pictured: back to the agent, with exact changes.
+		fake.setSteps([
+			{
+				name: "header-fix",
+				write: { "src/header.js": "export const color = 'blue';\n" },
+				cost: 0.01,
+			},
+			{ name: "header-review-2", text: "VERDICT: PASS", cost: 0.01 },
+		]);
+		let before = fake.calls().length;
+		const revised = await tool("revise_subtask", {
+			subtask: "1",
+			instructions: "The header must be blue (#1d4ed8), not red.",
+		});
+		expect(revised.isError).toBe(false);
+		await controller.idle();
+		runs = fake.calls().slice(before);
+		expect(runs.map((c) => c.step)).toEqual(["header-fix", "header-review-2"]);
+		expect(runs[0].stdin).toContain(
+			"The header must be blue (#1d4ed8), not red.",
+		);
+		expect(runs[0].stdin).toContain("The Team chat (the user's Coordinator)");
+		expect(fs.readFileSync(join(repo, "src", "header.js"), "utf8")).toContain(
+			"blue",
+		);
+		expect(kinds()).toEqual(["review", "review"]);
+		expect(coordinatorEvents[1].message).toContain("after revision 1");
+
+		// Approved: the Footer starts, and waits for its own review.
+		fake.setSteps([
+			{
+				name: "footer",
+				write: { "src/footer.js": "export const footer = 1;\n" },
+				cost: 0.01,
+			},
+			{ name: "footer-review", text: "VERDICT: PASS", cost: 0.01 },
+		]);
+		before = fake.calls().length;
+		expect((await tool("approve_subtask", { subtask: "1" })).isError).toBe(
+			false,
+		);
+		await controller.idle();
+		expect(
+			fake
+				.calls()
+				.slice(before)
+				.map((c) => c.step),
+		).toEqual(["footer", "footer-review"]);
+		expect(kinds()).toEqual(["review", "review", "review"]);
+		// Only finished work is approved; unknown subtasks are refused.
+		expect((await tool("approve_subtask", { subtask: "9" })).isError).toBe(
+			true,
+		);
+
+		await tool("approve_subtask", { subtask: "2", note: "matches" });
+		await controller.idle();
+		status = await tool("plan_status");
+		expect(status.text).toContain('"A header and a footer" — done');
+		expect(status.text).toContain("approved by you");
+		expect(kinds().at(-1)).toBe("done");
+		expect(fake.remainingSteps()).toBe(0);
 	}, 120_000);
 
 	it("the Team chat resumes a stopped plan itself, but leaves what only the user can settle", async () => {

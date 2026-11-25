@@ -146,6 +146,8 @@ export interface TaskRun {
 	/** For a custom-role run: which role, and whether it could edit files. */
 	customRoleId?: string;
 	customAccess?: "read-only" | "edit";
+	/** A fix run the Team chat asked for after reviewing the finished work. */
+	revision?: boolean;
 	/** Reviewer verdict, parsed from the review run's final text. */
 	verdict?: "PASS" | "FAIL";
 	/** Checks run by ADE (kind "checks"). */
@@ -338,6 +340,40 @@ export interface TaskRecord {
 		at: string;
 		stopped: Array<{ slug: string; reason: string }>;
 	}>;
+	/**
+	 * For a team request started from the Team chat: the user's vision, and
+	 * whether the Team chat reviews each finished subtask before the work
+	 * built on it starts (asking for revisions when it falls short).
+	 */
+	coordinator?: CoordinatorRun;
+	/** For a subtask: the Team chat's review of its finished work. */
+	review?: CoordinatorReview;
+	/** For a subtask: changes the Team chat asked for after reviewing it. */
+	revisions?: Array<{ at: string; text: string; runId?: string }>;
+	/** For a subtask: the Coordinator's estimate of its length, in minutes. */
+	estimateMinutes?: number;
+}
+
+export interface CoordinatorRun {
+	/** What the user wants, as the Team chat understood and confirmed it. */
+	vision?: string;
+	/** The Team chat reviews each finished subtask before it counts. */
+	review: boolean;
+	startedAt: string;
+	/** The time box the user agreed to: no new work starts after it. */
+	deadline?: string;
+	/** What ADE already told the Team chat (so each thing is told once). */
+	told?: string[];
+}
+
+export interface CoordinatorReview {
+	state: "waiting" | "approved" | "revising";
+	since: string;
+	/** Revisions asked for so far. */
+	rounds: number;
+	/** Who approved: the Team chat, or ADE when it did not answer in time. */
+	by?: "coordinator" | "timeout" | "time-up";
+	note?: string;
 }
 
 const MAX_DESCRIPTION_LENGTH = 20_000;
