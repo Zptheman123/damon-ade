@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { electronTrpc } from "renderer/lib/electron-trpc";
+import { isClaudeTitle } from "renderer/lib/terminal/claude-title";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import type { Tab } from "renderer/stores/tabs/types";
 import { useTabsWithPresets } from "renderer/stores/tabs/useTabsWithPresets";
@@ -9,17 +10,17 @@ const startedThisRun = new Set<string>();
 
 /** Restored terminals report their title shortly after start-up. */
 const SETTLE_MS = 3000;
-/** A tab this new may not have reported "claude" as its title yet. */
+/** A tab this new may not have reported Claude Code's title yet. */
 const STARTING_MS = 15_000;
 
 /**
  * Whether Claude Code is (still) running in a Team chat tab. A preset's name
  * is kept as the tab's title; `name` follows the terminal's own title, which
- * is "claude" while Claude Code runs and the shell's name once it has exited
+ * is Claude Code's while it runs ("✳ Team chat") and the shell's name once it has exited
  * (after a reboot, a restored tab is only a shell).
  */
 function isRunning(tab: Tab): boolean {
-	return /claude/i.test(tab.name) || Date.now() - tab.createdAt < STARTING_MS;
+	return isClaudeTitle(tab.name) || Date.now() - tab.createdAt < STARTING_MS;
 }
 
 /**

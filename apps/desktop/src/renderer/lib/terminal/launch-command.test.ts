@@ -52,6 +52,55 @@ describe("launchCommandInPane", () => {
 	});
 });
 
+describe("launchCommandInPane when the session is slow to start", () => {
+	it("retries until the session is up, then types the command once", async () => {
+		let creates = 0;
+		const createOrAttach = mock(async () => {
+			creates++;
+			if (creates < 3) throw new Error("Terminal session not ready");
+			return {};
+		});
+		let writes = 0;
+		const write = mock(async () => {
+			writes++;
+			if (writes < 2) throw new Error("not found or not alive");
+			return {};
+		});
+
+		await launchCommandInPane({
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			command: "claude",
+			createOrAttach,
+			write,
+			retry: { attempts: 5, delayMs: 1 },
+		});
+
+		expect(createOrAttach).toHaveBeenCalledTimes(4);
+		expect(write).toHaveBeenCalledTimes(2);
+	});
+
+	it("gives up with the error after the last attempt", async () => {
+		const createOrAttach = mock(async () => {
+			throw new Error("never starts");
+		});
+		const write = mock(async () => ({}));
+		await expect(
+			launchCommandInPane({
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				command: "claude",
+				createOrAttach,
+				write,
+				retry: { attempts: 2, delayMs: 1 },
+			}),
+		).rejects.toThrow("never starts");
+		expect(write).not.toHaveBeenCalled();
+	});
+});
+
 describe("buildTerminalCommand", () => {
 	it("joins commands with shell separators", () => {
 		expect(buildTerminalCommand(["echo one", "echo two"])).toBe(

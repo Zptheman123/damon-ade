@@ -64,6 +64,16 @@ export async function writeCommandsInPane({
 	await writeCommandInPane({ paneId, command, write });
 }
 
+/**
+ * How long a new session may take to start before the command is retried.
+ * A session can be slow to start (another one still closing, a busy
+ * machine): the command waits for it rather than being lost, which left a
+ * plain shell where a tool such as the Team chat should have been running.
+ */
+export const LAUNCH_RETRY = { attempts: 12, delayMs: 2_500 };
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export async function launchCommandInPane({
 	paneId,
 	tabId,
@@ -71,12 +81,27 @@ export async function launchCommandInPane({
 	command,
 	createOrAttach,
 	write,
-}: LaunchCommandInPaneOptions): Promise<void> {
-	await createOrAttach({
-		paneId,
-		tabId,
-		workspaceId,
-	});
-
-	await writeCommandInPane({ paneId, command, write });
+	retry = LAUNCH_RETRY,
+}: LaunchCommandInPaneOptions & {
+	retry?: { attempts: number; delayMs: number };
+}): Promise<void> {
+	let lastError: unknown;
+	for (let attempt = 0; attempt < Math.max(1, retry.attempts); attempt++) {
+		if (attempt > 0) await wait(retry.delayMs);
+		try {
+			await createOrAttach({ paneId, tabId, workspaceId });
+		} catch (error) {
+			// Not started yet: try again shortly (attaching is idempotent).
+			lastError = error;
+			continue;
+		}
+		try {
+			await writeCommandInPane({ paneId, command, write });
+			return;
+		} catch (error) {
+			// The session is not alive yet: the command was not typed.
+			lastError = error;
+		}
+	}
+	throw lastError;
 }
