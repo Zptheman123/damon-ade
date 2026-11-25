@@ -23,9 +23,11 @@ import {
 	withTaskLock,
 } from "main/lib/agent-workflow";
 import { planEta } from "main/lib/agent-workflow/plan-eta";
+import { listSkills } from "main/lib/agent-workflow/skills";
 import {
 	MAX_TEAM_CHAT_SUBTASKS,
 	parseSplit,
+	type SplitPlan,
 } from "main/lib/agent-workflow/split";
 import { PLANNING_PRINCIPLES } from "main/lib/agent-workflow/stage-prompts";
 import { getLocalToken } from "main/lib/notifications/local-auth";
@@ -57,8 +59,9 @@ Discern the vision first:
 
 Plan:
 ${PLANNING_PRINCIPLES}
+- Skills: team_overview lists the Claude Code skills installed (the user's, this repository's and their plugins'). When a subtask's work matches a skill's description, or what the user implied calls for it (a polished interface: a design skill; deploying: a deploy skill; React performance: a React skill), give that subtask those skills by name. Its agent loads them before it starts. Pick only what fits that subtask, name the skills in the plan you show the user, and never invent a skill that is not listed.
 - A long unattended run may use more subtasks (up to ${MAX_TEAM_CHAT_SUBTASKS}): whole features, in the order they build on each other, with a last subtask that checks the whole app end to end against the vision and fixes what falls short.
-- Propose a plan as a numbered list. For each subtask: a short title, what to build and how to know it is done (its acceptance criteria from the vision brief), the specialist (by name, or "none"), the route ("quick", "implement", "plan" or "exceptional"), the model per role, an honest estimate in minutes (including checks and review: about 10 for quick work, 20 to 40 for a normal feature, 45 to 90 for a large one), and which earlier subtasks it waits for. Independent subtasks run at the same time on their agents. Revise the plan whenever the user asks.
+- Propose a plan as a numbered list. For each subtask: a short title, what to build and how to know it is done (its acceptance criteria from the vision brief), the specialist (by name, or "none"), the route ("quick", "implement", "plan" or "exceptional"), the model per role, the skills it uses (if any), an honest estimate in minutes (including checks and review: about 10 for quick work, 20 to 40 for a normal feature, 45 to 90 for a large one), and which earlier subtasks it waits for. Independent subtasks run at the same time on their agents. Revise the plan whenever the user asks.
 - Models, as cheaply as is reliable: haiku only for trivial low-risk work, sonnet for normal work, opus for planning or reviewing difficult or risky work, fable only for exceptional architecture. Risky work (authentication, permissions, secrets, payments, data migrations, messaging people) is never "quick".
 - Only when the user clearly says to start (for example "go"), call start_plan with their request, the confirmed vision brief, the hours they agreed to and the exact plan. Then tell them they can leave: you review each finished subtask, ask for revisions, and report when it is done; the countdown in ADE's top bar shows the time left.
 
@@ -93,6 +96,12 @@ const SUBTASK_PROPERTIES = {
 		type: "integer",
 		description:
 			"Estimated minutes, including checks and review (for the countdown).",
+	},
+	skills: {
+		type: "array",
+		items: { type: "string" },
+		description:
+			'Installed skills (names from team_overview, e.g. "frontend-design" or "vercel:deploy") the agent loads for this work; [] if none fits.',
 	},
 } as const;
 
@@ -443,7 +452,7 @@ function describePlan(request: TaskRecord, all: TaskRecord[]): string {
 	};
 	const lines = subtasks.map((sub, i) =>
 		sub
-			? `${i + 1}. ${sub.title} [id ${sub.slug}] — ${sub.agentName ? `${sub.agentName}, ` : ""}${sub.state}${reviewOf(sub)}${sub.revisions?.length ? `, revised ${sub.revisions.length}x` : ""}${sub.stateReason && sub.state !== "done" ? ` (${sub.stateReason})` : ""}`
+			? `${i + 1}. ${sub.title} [id ${sub.slug}] — ${sub.agentName ? `${sub.agentName}, ` : ""}${sub.state}${reviewOf(sub)}${sub.skills?.length ? `, skills: ${sub.skills.join(", ")}` : ""}${sub.revisions?.length ? `, revised ${sub.revisions.length}x` : ""}${sub.stateReason && sub.state !== "done" ? ` (${sub.stateReason})` : ""}`
 			: `${i + 1}. (missing)`,
 	);
 	const children = subtasks.filter((t): t is TaskRecord => !!t);
@@ -567,6 +576,12 @@ export function createTeamMcpHandler(
 		const plans = teamRequests(listTaskRecords(ctx.project))
 			.slice(0, 5)
 			.map((t) => `- ${t.slug}: "${t.title}" — ${t.state}`);
+		const skills = listSkills({ projectRoot: ctx.project.root })
+			.slice(0, 120)
+			.map(
+				(s) =>
+					`- ${s.name}${s.source === "project" ? " (this repository's)" : ""}: ${s.description.slice(0, 220) || "(no description)"}`,
+			);
 		return [
 			`Team "${ctx.project.name}", repository ${ctx.project.root}.`,
 			"",
@@ -577,9 +592,31 @@ export function createTeamMcpHandler(
 			"",
 			`Agents: ${agents.map((a) => a.name).join(", ") || "none"}.`,
 			"",
+			"Skills the agents can use (give a subtask the ones its work calls for):",
+			...(skills.length ? skills : ["- none installed"]),
+			"",
 			"Latest plans:",
 			...(plans.length ? plans : ["- none yet"]),
 		].join("\n");
+	};
+
+	/** A plan's skills that are installed, and the names that are not. */
+	const checkSkills = (root: string, plan: SplitPlan) => {
+		const installed = new Set(
+			listSkills({ projectRoot: root }).map((s) => s.name),
+		);
+		const missing = new Set<string>();
+		for (const sub of plan.subtasks) {
+			if (!sub.skills) continue;
+			for (const name of sub.skills) {
+				if (!installed.has(name)) missing.add(name);
+			}
+			sub.skills = sub.skills.filter((name) => installed.has(name));
+			if (!sub.skills.length) sub.skills = undefined;
+		}
+		return missing.size
+			? `\n\nNot installed, so left out: ${[...missing].join(", ")}. team_overview lists the skills there are.`
+			: "";
 	};
 
 	const startPlan = async (
@@ -603,6 +640,7 @@ export function createTeamMcpHandler(
 		const hours = Number(args.hours);
 		const budget = Number(args.budgetUsdPerSubtask);
 		const ctx = deps.resolveWorkspace(workspaceId);
+		const skillNote = checkSkills(ctx.project.root, plan);
 		const execution = loadWorkflowSettings(deps.homeDir()).execution;
 		const startedAt = new Date();
 		const created = createTask(ctx.project, {
@@ -658,7 +696,7 @@ export function createTeamMcpHandler(
 			? " Each subtask waits for your review when it finishes: ADE types an [ADE] message here; then review_subtask, and approve_subtask or revise_subtask."
 			: "";
 		return text(
-			`Started. ${describePlan(started, all)}\n\nProgress also shows in ADE (Tasks, Team plans, and the countdown in the top bar).${reviewing}`,
+			`Started. ${describePlan(started, all)}\n\nProgress also shows in ADE (Tasks, Team plans, and the countdown in the top bar).${reviewing}${skillNote}`,
 		);
 	};
 
@@ -748,9 +786,10 @@ export function createTeamMcpHandler(
 			`\`\`\`json\n${JSON.stringify({ reason: "added", subtasks: [{ ...args, dependsOn: [] }] })}\n\`\`\``,
 		);
 		const subtask = parsed?.subtasks[0];
-		if (!subtask) {
+		if (!parsed || !subtask) {
 			return text("add_subtask needs a title and a description.", true);
 		}
+		const skillNote = checkSkills(ctx.project.root, parsed);
 		const dependsOn: string[] = [];
 		for (const ref of Array.isArray(args.dependsOn) ? args.dependsOn : []) {
 			const dep = findSubtask(all, request, ref);
@@ -763,7 +802,7 @@ export function createTeamMcpHandler(
 			.controller()
 			.coordinatorAddSubtask(ctx.project, request.slug, subtask, dependsOn);
 		return text(
-			`Added "${subtask.title}".\n\n${describePlan(after, listTaskRecords(ctx.project))}`,
+			`Added "${subtask.title}".${skillNote}\n\n${describePlan(after, listTaskRecords(ctx.project))}`,
 		);
 	};
 

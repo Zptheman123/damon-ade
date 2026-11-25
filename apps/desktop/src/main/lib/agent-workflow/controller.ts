@@ -46,6 +46,7 @@ import {
 } from "./identity";
 import { cheaperFallback, resolveRunModel } from "./models";
 import { type ProjectWorkflow, portablePath } from "./project-workflow";
+import { SKILL_NAME, skillsNote } from "./skills";
 import { RESEARCH_TEMPLATE_ID } from "./specialist-templates";
 import {
 	applicableCustomRoles,
@@ -2696,6 +2697,10 @@ export class TaskController {
 			settings.execution.permissions === "bypass"
 				? "bypassPermissions"
 				: "acceptEdits";
+		// The skills the Coordinator chose, for the runs that do the work.
+		const skills = readOnly
+			? []
+			: (task.skills ?? []).filter((name) => SKILL_NAME.test(name));
 		// Implementing runs may run commands; reviews and planning never do.
 		const runsCommands =
 			!readOnly &&
@@ -2717,6 +2722,9 @@ export class TaskController {
 			...(readOnly || kind === "plan" || kind === "escalate"
 				? READ_ONLY_GIT
 				: []),
+			// The skills the Coordinator chose for this work, loadable without
+			// a permission prompt (a refused one would pause the task).
+			...skills.map((name) => `Skill(${name})`),
 		];
 		let extra: ReturnType<NonNullable<ControllerDeps["extraTools"]>>;
 		try {
@@ -2799,6 +2807,7 @@ export class TaskController {
 			reconcileNote(task, kind) +
 			rerouteNote(task, kind) +
 			turnLimitNote(task, kind) +
+			skillsNote(skills) +
 			(kind === "triage" || kind === "split"
 				? ""
 				: specialtyNote(
@@ -3259,6 +3268,7 @@ ${(run.summary ?? "").trim()}
 				reason: "assigned by the Coordinator",
 			},
 			estimateMinutes: sub.minutes,
+			skills: sub.skills?.length ? sub.skills : undefined,
 		};
 		saveTask(project, child);
 		return child;

@@ -1373,6 +1373,22 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 			},
 			{ name: "header-review", text: "Looks fine.\nVERDICT: PASS", cost: 0.01 },
 		]);
+		// The user's installed skills (a Claude Code folder of the test's own).
+		const claudeDir = join(root, "claude-config");
+		mkdirSync(join(claudeDir, "skills", "frontend-design"), {
+			recursive: true,
+		});
+		writeFileSync(
+			join(claudeDir, "skills", "frontend-design", "SKILL.md"),
+			"---\nname: frontend-design\ndescription: Distinctive, polished interfaces.\n---\n",
+		);
+		const previousConfig = process.env.CLAUDE_CONFIG_DIR;
+		process.env.CLAUDE_CONFIG_DIR = claudeDir;
+		const overview = await tool("team_overview");
+		expect(overview.text).toContain(
+			"- frontend-design: Distinctive, polished interfaces.",
+		);
+
 		const start = fake.calls().length;
 		const started = await tool("start_plan", {
 			request: "A header and a footer",
@@ -1386,6 +1402,8 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 						description: "The header with the name.",
 						route: "quick",
 						minutes: 10,
+						// What a polished header implies; one that is not installed.
+						skills: ["frontend-design", "made-up-skill"],
 						dependsOn: [],
 					},
 					{
@@ -1398,12 +1416,23 @@ describe.if(bash !== null && git !== null)("specialists and roles", () => {
 				],
 			},
 		});
+		if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+		else process.env.CLAUDE_CONFIG_DIR = previousConfig;
 		expect(started.isError).toBe(false);
+		expect(started.text).toContain("skills: frontend-design");
+		expect(started.text).toContain("Not installed, so left out: made-up-skill");
 		await controller.idle();
 		let runs = fake.calls().slice(start);
 		expect(runs.map((c) => c.step)).toEqual(["header", "header-review"]);
 		// Every agent works toward the vision the user confirmed.
 		expect(runs[0].stdin).toContain("A calm site: a BLUE header");
+		// The skill the Coordinator chose: loaded first, without a prompt.
+		expect(runs[0].stdin).toContain("## Skills to use");
+		expect(runs[0].stdin).toContain("`frontend-design`");
+		expect(runs[0].args).toContain("Skill(frontend-design)");
+		expect(runs[0].stdin).not.toContain("made-up-skill");
+		// The reviewer judges the work; it does not load the skills.
+		expect(runs[1].stdin).not.toContain("## Skills to use");
 
 		// Finished: it waits for the Team chat, and so does the Footer.
 		let status = await tool("plan_status");

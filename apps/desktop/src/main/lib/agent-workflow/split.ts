@@ -1,5 +1,6 @@
 import type { TaskRoute } from "shared/utils/task-routing";
 import type { EffortLevel } from "./agent-workflow";
+import { SKILL_NAME } from "./skills";
 import type { RoleName } from "./workflow-settings";
 
 /**
@@ -47,6 +48,8 @@ export interface Subtask {
 	dependsOn: number[];
 	/** The Coordinator's estimate of how long it takes, in minutes. */
 	minutes?: number;
+	/** Claude Code skills the agent should load for this work. */
+	skills?: string[];
 }
 
 export interface SplitPlan {
@@ -116,10 +119,24 @@ export function parseSplit(
 					: [];
 			indexOf.set(position, subtasks.length);
 			const minutes = Number(entry.minutes);
+			const skills = Array.isArray(entry.skills)
+				? [
+						...new Set(
+							entry.skills
+								.map((s) =>
+									String(s ?? "")
+										.trim()
+										.replace(/^\//, ""),
+								)
+								.filter((s) => SKILL_NAME.test(s)),
+						),
+					].slice(0, 6)
+				: [];
 			subtasks.push({
 				...(Number.isFinite(minutes) && minutes > 0
 					? { minutes: Math.min(Math.round(minutes), 480) }
 					: {}),
+				...(skills.length ? { skills } : {}),
 				dependsOn,
 				title,
 				description,

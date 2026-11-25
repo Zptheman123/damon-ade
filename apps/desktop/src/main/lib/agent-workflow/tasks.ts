@@ -352,6 +352,8 @@ export interface TaskRecord {
 	revisions?: Array<{ at: string; text: string; runId?: string }>;
 	/** For a subtask: the Coordinator's estimate of its length, in minutes. */
 	estimateMinutes?: number;
+	/** Claude Code skills the agent loads for this work (chosen by the Coordinator). */
+	skills?: string[];
 }
 
 export interface CoordinatorRun {
